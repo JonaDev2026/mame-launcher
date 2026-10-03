@@ -25,7 +25,7 @@ A sleek, lightweight, and modern desktop launcher for **MAME** built with Python
 1. Clone or download this repository.
 2. Install the required dependencies:
    ```bash
-   pip install PySide6
+   sudo apt install python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets
    ```
 3. Run the application:
    ```bash
