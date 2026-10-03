@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MAME Launcher
+Comment=Launch arcade games
+Exec=python3 /home/jonathan/mame/z.mame.py
+Path=/home/jonathan/mame
+Icon=/home/jonathan/mame/img/icon.png
+Terminal=false
+Categories=Game;Emulator;
