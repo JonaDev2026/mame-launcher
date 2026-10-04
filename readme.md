@@ -1,59 +1,28 @@
 # MAME Launcher
 
-A sleek, lightweight, and modern desktop launcher for **MAME** built with Python and PySide6. It lists your ROM collection from a folder, automatically fetches metadata from MAME, downloads cover art from the Libretro thumbnails repository without needing an API key, extracts vibrant dominant colors for a polished UI look, and launches your games seamlessly.
+Un launcher desktop moderno, leggero ed elegante per **MAME**, scritto in Python con PySide6. Gestisce la tua collezione di ROM, recupera automaticamente i metadati, scarica le copertine e permette di avviare i giochi con un'interfaccia grafica curata e reattiva[cite: 2].
 
-![MAME Launcher Preview](preview.png)
+## Caratteristiche Principali
 
-## Features
+- **Scansione Automatica delle ROM:** Rileva istantaneamente gli archivi `.zip` standard presenti nella cartella ROM[cite: 2].
+- **Worker in Background Dedicato:** Un processo asincrono elabora i metadati e aggiorna lo stato in tempo reale con una barra di progresso dettagliata nella barra di stato.
+- **Libreria e Filtri Avanzati:** Sidebar laterale per filtrare rapidamente tra *Tutti i giochi*, *Preferiti* e suddivisione per stato di funzionamento (*Buono*, *Imperfetto*, *Inavviabile*).
+- **Integrazione Metadati e BIOS:** Rilevamento automatico dei file BIOS, dei produttori con colorazione dedicata e dei cloni.
+- **Download delle Copertine:** Recupera automaticamente box art e schermate dal repository `libretro-thumbnails` senza bisogno di chiavi API[cite: 2].
+- **Supporto Flatpak:** Funziona nativamente con le installazioni Flatpak di MAME gestendo i permessi della sandbox in autonomia[cite: 2].
+- **Configurazione Persistente:** Salvataggio di preferenze, cache e immagini nella cartella utente `~/.config/mame_launcher`.
 
-- **Automatic ROM Scanning:** Reads standard `.zip` ROM archives from your custom ROM directory.
-- **MAME Metadata Integration:** Queries MAME (`-listxml`) to retrieve game titles, release years, manufacturers, clone lineage, and BIOS requirements.
-- **Cover Art Downloader:** Automatically fetches box arts, titles, and snapshots from the `libretro-thumbnails` repository.
-- **Dynamic Accent Colors:** Computes the dominant color of each game's cover art to style list icons automatically.
-- **Favorites:** Mark games as favorites and browse them from the Library sidebar.
-- **Flatpak Support:** Works out-of-the-box with the Flatpak version of MAME, handling sandbox folder permissions automatically.
-- **Persistent Caching:** Caches metadata, settings and images locally in `~/.config/mame_launcher` for instant startups.
-- **Clean XVB-inspired Dark Theme:** Custom styled widgets, pill search bar, and full-screen toggle support.
+## Requisiti
 
-## Requirements
+- Python 3.8+[cite: 2]
+- [PySide6](https://pypi.org/project/PySide6/)[cite: 2]
+- MAME installato sul sistema (tramite pacchetto Flatpak o eseguibile)[cite: 2]
 
-- Python 3.8+
-- [PySide6](https://pypi.org/project/PySide6/)
-- Flatpak with MAME (`org.mamedev.MAME`)
+## Installazione e Utilizzo
 
-## Installation (Debian / Ubuntu / Mint)
-
-1. Clone or download this repository.
-2. Install the dependencies:
-```bash
+1. Clona o scarica questa repository.
+2. Installa le dipendenze necessarie (esempio per sistemi Debian/Ubuntu):
+   ```bash
    sudo apt install python3 python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets flatpak
-```
-3. Install MAME from Flathub:
-```bash
-   flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+   flatpak remote-add --if-not-exists flathub [https://dl.flathub.org/repo/flathub.flatpakrepo](https://dl.flathub.org/repo/flathub.flatpakrepo)
    flatpak install flathub org.mamedev.MAME
-```
-
-### Alternative: PySide6 via pip
-
-If the `python3-pyside6.*` packages are not available in your distribution:
-
-```bash
-sudo apt install python3-venv libxcb-cursor0
-python3 -m venv ~/venv_mame
-~/venv_mame/bin/pip install PySide6
-```
-
-## Usage
-
-```bash
-python3 z_mame.py
-```
-
-(or `~/venv_mame/bin/python z_mame.py` if you used the pip method)
-
-On your first launch, you will be prompted to select your **ROM folder** and optionally your **BIOS folder**. You can also update these paths at any time via the **Settings** menu.
-
-## License
-
-Distributed under the MIT License. See the code headers for more details.
