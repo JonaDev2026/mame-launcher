@@ -23,7 +23,7 @@ SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
 LOCK_FILE = os.path.join(CONFIG_DIR, "worker.lock")
 MAME_CMD = ["flatpak", "run", "org.mamedev.MAME"]
 MAME_HOME = os.path.expanduser("~/mame")
-DEFAULT_SETTINGS = {"fullscreen": False, "rom_dir": "", "bios_dir": "", "favorites": []}
+DEFAULT_SETTINGS = {"fullscreen": False, "rom_dir": "", "bios_dir": "", "favorites": [], "language": "en"}
 
 os.makedirs(IMG_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -43,6 +43,89 @@ IN_ONDA = "#3b2f4f"
 
 FALLBACK_MAKER_COLORS = ("#30d158", "#bf5af2", "#ff6fae", "#64d2ff", "#ffd60a", "#a0724a")
 DEFAULT_MAKER_COLOR = "#8a94a6"
+
+LANGS = {
+    "en": {
+        "search_placeholder": "Search",
+        "play": "Play",
+        "favorite": "Favorite",
+        "library": "Library",
+        "all_games": "All games",
+        "favorites": "Favorites",
+        "status_good": "Good",
+        "status_imperfect": "Imperfect",
+        "status_nonrunnable": "Non-runnable",
+        "worker_inactive": "Background worker inactive",
+        "worker_starting": "starting...",
+        "worker_idle": "inactive or completed",
+        "ready": "Ready",
+        "no_rom_folder": "No ROM folder set",
+        "select_rom_start": "Select a ROM folder to start.",
+        "first_run_title": "MAME Launcher",
+        "first_run_msg": "First run: select the ROM folder, then the BIOS folder.",
+        "menu_file": "File",
+        "menu_refresh": "Refresh ROMs",
+        "menu_open_mame": "Open MAME folder",
+        "menu_quit": "Quit",
+        "menu_settings": "Settings",
+        "menu_rom_folder": "ROM folder...",
+        "menu_bios_folder": "BIOS folder...",
+        "menu_display_mode": "Display mode",
+        "menu_window": "Windowed",
+        "menu_fullscreen": "Fullscreen",
+        "menu_language": "Language",
+        "games_count": "games",
+        "bios_count": "BIOS",
+        "no_images": "No image",
+        "loading_bg": "Loading in background...",
+        "loading": "Loading...",
+        "ready_to_play": "Ready to play...",
+        "year": "Year",
+        "maker": "Maker",
+        "rom": "ROM",
+        "clone_of": "Clone of"
+    },
+    "it": {
+        "search_placeholder": "Cerca",
+        "play": "Avvia",
+        "favorite": "Preferito",
+        "library": "Libreria",
+        "all_games": "Tutti i giochi",
+        "favorites": "Preferiti",
+        "status_good": "Buono",
+        "status_imperfect": "Imperfetto",
+        "status_nonrunnable": "Inavviabile",
+        "worker_inactive": "Background worker inattivo",
+        "worker_starting": "avvio in corso...",
+        "worker_idle": "inattivo o completato",
+        "ready": "Pronto",
+        "no_rom_folder": "Nessuna cartella ROM impostata",
+        "select_rom_start": "Seleziona una cartella ROM per iniziare.",
+        "first_run_title": "MAME Launcher",
+        "first_run_msg": "Primo avvio: seleziona la cartella delle ROM, poi quella dei file BIOS.",
+        "menu_file": "File",
+        "menu_refresh": "Aggiorna ROM",
+        "menu_open_mame": "Apri cartella MAME",
+        "menu_quit": "Esci",
+        "menu_settings": "Impostazioni",
+        "menu_rom_folder": "Cartella ROM...",
+        "menu_bios_folder": "Cartella BIOS...",
+        "menu_display_mode": "Modalità schermo",
+        "menu_window": "Finestra",
+        "menu_fullscreen": "Schermo intero",
+        "menu_language": "Lingua",
+        "games_count": "giochi",
+        "bios_count": "BIOS",
+        "no_images": "Nessuna immagine",
+        "loading_bg": "Caricamento in background...",
+        "loading": "Caricamento...",
+        "ready_to_play": "Pronto per giocare...",
+        "year": "Anno",
+        "maker": "Produttore",
+        "rom": "ROM",
+        "clone_of": "Clone di"
+    }
+}
 
 _MAKER_TABLE = [
     (("acclaim", "ljn"), "#30d158"),
@@ -236,9 +319,9 @@ class GameDelegate(QStyledItemDelegate):
         painter.restore()
 
 class SearchBox(QLineEdit):
-    def __init__(self):
+    def __init__(self, placeholder="Search"):
         super().__init__()
-        self.setPlaceholderText("Search")
+        self.setPlaceholderText(placeholder)
         pal = self.palette()
         pal.setColor(QPalette.PlaceholderText, QColor(GRIGIO))
         self.setPalette(pal)
@@ -328,7 +411,6 @@ class Launcher(QWidget):
 
         self.start_background_worker()
         
-        # Stato per tracciare il worker ed evitare refresh pesanti continui
         self.worker_was_active = os.path.exists(LOCK_FILE)
 
         self.meta = load_json(META_FILE)
@@ -339,7 +421,6 @@ class Launcher(QWidget):
         self.all_item_cache = {}
         self.mame_thread = None
 
-        # Timer di debounce per la ricerca (250ms)
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
         self.search_timer.setInterval(250)
@@ -350,7 +431,7 @@ class Launcher(QWidget):
         self.poll_timer.timeout.connect(self.poll_background_updates)
         self.poll_timer.start()
 
-        self.search = SearchBox()
+        self.search = SearchBox(self.tr("search_placeholder"))
         self.search.textChanged.connect(self.on_search_changed)
         
         self.list = QListWidget()
@@ -371,18 +452,18 @@ class Launcher(QWidget):
         side.setObjectName("side")
         side.setLayout(left)
 
-        self.cover = QLabel("Caricamento...")
+        self.cover = QLabel(self.tr("loading"))
         self.cover.setAlignment(Qt.AlignCenter)
         self.cover.setMinimumSize(400, 300)
 
-        self.info = QLabel("Pronto per giocare...")
+        self.info = QLabel(self.tr("ready_to_play"))
         self.info.setWordWrap(True)
         self.info.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         
-        self.btn = QPushButton("Play")
+        self.btn = QPushButton(self.tr("play"))
         self.btn.clicked.connect(self.launch)
         
-        self.fav_btn = QPushButton("Preferito")
+        self.fav_btn = QPushButton(self.tr("favorite"))
         self.fav_btn.clicked.connect(self.toggle_favorite)
 
         btn_layout = QHBoxLayout()
@@ -398,6 +479,7 @@ class Launcher(QWidget):
         center_container = QWidget()
         center_container.setLayout(center_layout)
 
+        self.library_header_lbl = QLabel()
         self.folders_list = QListWidget()
         self.folders_list.setIconSize(QSize(DOT, DOT))
         self.folders_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -406,7 +488,7 @@ class Launcher(QWidget):
 
         folders_layout = QVBoxLayout()
         folders_layout.setContentsMargins(10, 10, 10, 10)
-        folders_layout.addWidget(QLabel("<b>Libreria</b>"))
+        folders_layout.addWidget(self.library_header_lbl)
         folders_layout.addWidget(self.folders_list)
         folders_widget = QWidget()
         folders_widget.setObjectName("folders")
@@ -423,9 +505,10 @@ class Launcher(QWidget):
         body.setSpacing(0)
         body.addWidget(splitter_main)
 
+        self.menu_bar_widget = self.build_menu()
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setMenuBar(self.build_menu())
+        lay.setMenuBar(self.menu_bar_widget)
         lay.setSpacing(0)
         lay.addLayout(body)
 
@@ -434,8 +517,8 @@ class Launcher(QWidget):
         status.setFixedHeight(26)
         sl = QHBoxLayout(status)
         sl.setContentsMargins(12, 0, 12, 0)
-        self.count_lbl = QLabel("Pronto")
-        self.prog_lbl = QLabel("Background worker inattivo")
+        self.count_lbl = QLabel(self.tr("ready"))
+        self.prog_lbl = QLabel(self.tr("worker_inactive"))
         sl.addWidget(self.count_lbl)
         sl.addSpacing(18)
         sl.addWidget(self.prog_lbl)
@@ -447,16 +530,53 @@ class Launcher(QWidget):
 
         self.setStyleSheet(STYLE)
         
+        self.update_library_header()
         self.build_item_cache()
         self.update_folders_list()
         self.fill_list()
 
         if not self.settings["rom_dir"]:
-            self.cover.setText("No ROM folder set")
-            self.info.setText("Seleziona una cartella ROM per iniziare.")
+            self.cover.setText(self.tr("no_rom_folder"))
+            self.info.setText(self.tr("select_rom_start"))
             QTimer.singleShot(100, self.first_run)
         else:
             QTimer.singleShot(200, self.compute_folder_size_async)
+
+    def tr(self, key):
+        lang = self.settings.get("language", "en")
+        return LANGS.get(lang, LANGS["en"]).get(key, key)
+
+    def set_language(self, lang_code):
+        self.settings["language"] = lang_code
+        save_settings(self.settings)
+        self.retranslate_ui()
+
+    def retranslate_ui(self):
+        # Ricostruisci il menu per aggiornare le voci localizzate
+        new_bar = self.build_menu()
+        self.layout().setMenuBar(new_bar)
+        self.menu_bar_widget.deleteLater()
+        self.menu_bar_widget = new_bar
+
+        self.search.setPlaceholderText(self.tr("search_placeholder"))
+        self.update_library_header()
+        self.update_folders_list()
+        self.fill_list()
+        
+        curr = self.current_name()
+        if curr:
+            self.show_game()
+        else:
+            if not self.settings["rom_dir"]:
+                self.cover.setText(self.tr("no_rom_folder"))
+                self.info.setText(self.tr("select_rom_start"))
+            else:
+                self.cover.setText(self.tr("loading_bg"))
+                self.info.setText(self.tr("ready_to_play"))
+        self.update_status()
+
+    def update_library_header(self):
+        self.library_header_lbl.setText(f"<b>{self.tr('library')}</b>")
 
     def start_background_worker(self):
         worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mame_background_worker.py")
@@ -476,10 +596,9 @@ class Launcher(QWidget):
     def poll_background_updates(self):
         is_locked = os.path.exists(LOCK_FILE)
 
-        # Aggiornamento leggero e continuo solo dell'etichetta di progresso
         prog_data = load_json(PROGRESS_FILE)
         if prog_data:
-            task = prog_data.get("task", "Elaborazione...")
+            task = prog_data.get("task", "Processing...")
             current = prog_data.get("current", 0)
             total = prog_data.get("total", 0)
             if total > 0:
@@ -489,11 +608,10 @@ class Launcher(QWidget):
                 self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>{task}</span>")
         else:
             if is_locked:
-                self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>avvio in corso...</span>")
+                self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>{self.tr('worker_starting')}</span>")
             else:
-                self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>inattivo o completato</span>")
+                self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>{self.tr('worker_idle')}</span>")
 
-        # Ricarica i dati pesanti della libreria SOLO quando il worker ha appena finito (transizione attivo -> inattivo)
         if self.worker_was_active and not is_locked:
             self.meta = load_json(META_FILE)
             self.status_cache = load_json(STATUS_FILE)
@@ -552,12 +670,12 @@ class Launcher(QWidget):
         favs = set(self.settings.get("favorites", []))
         fav_count = sum(1 for r in valid_roms if r in favs)
 
-        it_all = QListWidgetItem(f"Tutti i giochi  ({total_count})")
+        it_all = QListWidgetItem(f"{self.tr('all_games')}  ({total_count})")
         it_all.setIcon(make_dot(COLOR_GAMES))
         it_all.setData(Qt.UserRole, "all")
         self.folders_list.addItem(it_all)
 
-        it_fav = QListWidgetItem(f"Preferiti  ({fav_count})")
+        it_fav = QListWidgetItem(f"{self.tr('favorites')}  ({fav_count})")
         it_fav.setIcon(make_dot("#bf5af2"))
         it_fav.setData(Qt.UserRole, "favorites")
         self.folders_list.addItem(it_fav)
@@ -569,14 +687,14 @@ class Launcher(QWidget):
                 status_counts[st] += 1
 
         status_labels = [
-            ("Buono", "buono", STATUS_COLORS["buono"]),
-            ("Imperfetto", "imperfetto", STATUS_COLORS["imperfetto"]),
-            ("Inavviabile", "inavviabile", STATUS_COLORS["inavviabile"])
+            (self.tr("status_good"), "buono", STATUS_COLORS["buono"]),
+            (self.tr("status_imperfect"), "imperfetto", STATUS_COLORS["imperfetto"]),
+            (self.tr("status_nonrunnable"), "inavviabile", STATUS_COLORS["inavviabile"])
         ]
 
         for label, st_key, color in status_labels:
             count = status_counts[st_key]
-            it_st = QListWidgetItem(f"Stato: {label}  ({count})")
+            it_st = QListWidgetItem(f"{self.tr('status_label')} {label}  ({count})")
             it_st.setIcon(make_dot(color))
             it_st.setData(Qt.UserRole, f"status:{st_key}")
             self.folders_list.addItem(it_st)
@@ -594,12 +712,12 @@ class Launcher(QWidget):
         self.folders_list.blockSignals(False)
 
     def first_run(self):
-        QMessageBox.information(self, "MAME Launcher", "Primo avvio: seleziona la cartella delle ROM, poi quella dei file BIOS.")
+        QMessageBox.information(self, self.tr("first_run_title"), self.tr("first_run_msg"))
         if self.set_folder("rom_dir"):
             self.set_folder("bios_dir")
 
     def set_folder(self, key):
-        title = "Seleziona cartella ROM" if key == "rom_dir" else "Seleziona cartella BIOS"
+        title = "Select ROM folder" if key == "rom_dir" else "Select BIOS folder"
         start = self.settings[key] or (MAME_HOME if os.path.isdir(MAME_HOME) else os.path.expanduser("~"))
         d = QFileDialog.getExistingDirectory(self, title, start)
         if not d:
@@ -627,35 +745,48 @@ class Launcher(QWidget):
 
     def build_menu(self):
         bar = QMenuBar()
-        file_menu = bar.addMenu("File")
+        file_menu = bar.addMenu(self.tr("menu_file"))
         
-        a_refresh = QAction("Aggiorna ROM", self)
+        a_refresh = QAction(self.tr("menu_refresh"), self)
         a_refresh.setShortcut(QKeySequence.Refresh)
         a_refresh.triggered.connect(self.reload_roms)
         file_menu.addAction(a_refresh)
 
         file_menu.addSeparator()
-        a_open = QAction("Apri cartella MAME", self)
+        a_open = QAction(self.tr("menu_open_mame"), self)
         a_open.triggered.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(MAME_HOME)))
         file_menu.addAction(a_open)
         file_menu.addSeparator()
-        a_quit = QAction("Esci", self)
+        a_quit = QAction(self.tr("menu_quit"), self)
         a_quit.triggered.connect(self.close)
         file_menu.addAction(a_quit)
 
-        sett = bar.addMenu("Impostazioni")
-        a_rom = QAction("Cartella ROM...", self)
+        sett = bar.addMenu(self.tr("menu_settings"))
+        a_rom = QAction(self.tr("menu_rom_folder"), self)
         a_rom.triggered.connect(lambda: self.set_folder("rom_dir"))
         sett.addAction(a_rom)
-        a_bios = QAction("Cartella BIOS...", self)
+        a_bios = QAction(self.tr("menu_bios_folder"), self)
         a_bios.triggered.connect(lambda: self.set_folder("bios_dir"))
         sett.addAction(a_bios)
         sett.addSeparator()
-        disp = sett.addMenu("Modalità schermo")
+
+        lang_menu = sett.addMenu(self.tr("menu_language"))
+        lang_grp = QActionGroup(self)
+        lang_grp.setExclusive(True)
+        current_lang = self.settings.get("language", "en")
+        for l_code, l_label in (("en", "English"), ("it", "Italiano")):
+            a = QAction(l_label, self, checkable=True)
+            a.setChecked(current_lang == l_code)
+            a.triggered.connect(lambda _c, code=l_code: self.set_language(code))
+            lang_grp.addAction(a)
+            lang_menu.addAction(a)
+
+        sett.addSeparator()
+        disp = sett.addMenu(self.tr("menu_display_mode"))
         grp = QActionGroup(self)
         grp.setExclusive(True)
-        for label, fs in (("Finestra", False), ("Schermo intero", True)):
-            a = QAction(label, self, checkable=True)
+        for label_key, fs in ((self.tr("menu_window"), False), (self.tr("menu_fullscreen"), True)):
+            a = QAction(label_key, self, checkable=True)
             a.setChecked(self.settings["fullscreen"] == fs)
             a.triggered.connect(lambda _c, v=fs: self.set_fullscreen(v))
             grp.addAction(a)
@@ -681,17 +812,19 @@ class Launcher(QWidget):
 
     def update_favorite_button(self, name):
         favs = self.settings.get("favorites", [])
-        self.fav_btn.setText("★ Preferito" if name in favs else "☆ Preferito")
+        star = "★" if name in favs else "☆"
+        self.fav_btn.setText(f"{star} {self.tr('favorite')}")
 
     def update_play_button_color(self, name):
         if not name:
             self.btn.setStyleSheet("")
-            self.btn.setText("Play")
+            self.btn.setText(self.tr("play"))
             return
         c = self.game_status_color(name)
         text_color = get_contrast_color(c)
         st = self.status_cache.get(name, "buono")
-        self.btn.setText(f"Play ({st.capitalize()})")
+        st_label = self.tr(f"status_{st}") if f"status_{st}" in LANGS[self.settings.get("language", "en")] else st
+        self.btn.setText(f"{self.tr('play')} ({st_label.capitalize()})")
         self.btn.setStyleSheet(f"""
             QPushButton {{ background-color: {c}; color: {text_color}; border: none; border-radius: 6px; padding: 8px; font-weight: bold; }}
             QPushButton:hover {{ background-color: {c}; }}
@@ -762,8 +895,8 @@ class Launcher(QWidget):
         names = self.bios_dir_names | {r for r in self.roms if self.meta.get(r, {}).get("bios", False)}
         
         parts = [
-            f"<span style='color:{COLOR_GAMES};'>●</span> <span style='color:#ffffff;'>{total_games} giochi</span>",
-            f"<span style='color:{COLOR_BIOS};'>●</span> <span style='color:#ffffff;'>{len(names)} BIOS</span>"
+            f"<span style='color:{COLOR_GAMES};'>●</span> <span style='color:#ffffff;'>{total_games} {self.tr('games_count')}</span>",
+            f"<span style='color:{COLOR_BIOS};'>●</span> <span style='color:#ffffff;'>{len(names)} {self.tr('bios_count')}</span>"
         ]
         if self.rom_size:
             parts.append(f"<span style='color:#ffffff;'>{fmt_size(self.rom_size)}</span>")
@@ -782,15 +915,20 @@ class Launcher(QWidget):
         m = self.meta.get(name, {"desc": name, "year": "?", "maker": "?", "clone": ""})
         
         rows = [
-            ("Year", m.get("year", "?")), 
-            ("Maker", m.get("maker", "?")), 
-            ("ROM", name + ".zip")
+            (self.tr("year"), m.get("year", "?")), 
+            (self.tr("maker"), m.get("maker", "?")), 
+            (self.tr("rom"), name + ".zip")
         ]
         if m.get("clone"):
-            rows.append(("Clone of", m["clone"]))
+            rows.append((self.tr("clone_of"), m["clone"]))
             
         txt = "<b>%s</b>" % html.escape(m.get("desc", name))
-        LABEL_COLORS = {"Year": "#0a84ff", "Maker": "#30d158", "ROM": "#ff9f0a", "Clone of": "#bf5af2"}
+        LABEL_COLORS = {
+            self.tr("year"): "#0a84ff", 
+            self.tr("maker"): "#30d158", 
+            self.tr("rom"): "#ff9f0a", 
+            self.tr("clone_of"): "#bf5af2"
+        }
         for k, v in rows:
             color = LABEL_COLORS.get(k, "#ffffff")
             txt += "<br><span style='color:%s'>%s:</span> %s" % (color, k, html.escape(v))
@@ -807,10 +945,10 @@ class Launcher(QWidget):
             self.cover.setPixmap(pm.scaled(self.cover.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         elif os.path.exists(p + ".none"):
             self.cover.setPixmap(QPixmap())
-            self.cover.setText("Nessuna immagine")
+            self.cover.setText(self.tr("no_images"))
         else:
             self.cover.setPixmap(QPixmap())
-            self.cover.setText("Caricamento in background...")
+            self.cover.setText(self.tr("loading_bg"))
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
