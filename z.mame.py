@@ -2,12 +2,10 @@ import hashlib
 import html
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.parse
-import urllib.request
-import xml.etree.ElementTree as ET
-
 from PySide6.QtCore import QRect, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QIcon,
                            QPainter, QPalette, QPen, QPixmap, QKeySequence)
@@ -19,10 +17,10 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
 CONFIG_DIR = os.path.expanduser("~/.config/mame_launcher")
 IMG_DIR = os.path.join(CONFIG_DIR, "img")
 META_FILE = os.path.join(CONFIG_DIR, "meta.json")
+STATUS_FILE = os.path.join(CONFIG_DIR, "status_cache.json")
+PROGRESS_FILE = os.path.join(CONFIG_DIR, "worker_progress.json")
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
-BASE_URL = "https://raw.githubusercontent.com/libretro-thumbnails/MAME/master/"
-IMG_KINDS = ["Named_Boxarts", "Named_Titles", "Named_Snaps"]
-
+LOCK_FILE = os.path.join(CONFIG_DIR, "worker.lock")
 MAME_CMD = ["flatpak", "run", "org.mamedev.MAME"]
 MAME_HOME = os.path.expanduser("~/mame")
 DEFAULT_SETTINGS = {"fullscreen": False, "rom_dir": "", "bios_dir": "", "favorites": []}
@@ -30,28 +28,111 @@ DEFAULT_SETTINGS = {"fullscreen": False, "rom_dir": "", "bios_dir": "", "favorit
 os.makedirs(IMG_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
-PALETTE = ("#ff5257", "#ff9f0a", "#ffd60a", "#30d158", "#0a84ff",
-           "#bf5af2", "#ff375f", "#64d2ff")
 DOT = 24
-SCALA_FILE = ("#ff5257", "#30d158", "#ff7f11", "#42a0ff",
-              "#ffd60a", "#bf5af2", "#ff6fae", "#64d2ff",
-              "#c19272", "#66e3b0", "#d4af37", "#9190f9",
-              "#e23179", "#b4e04a", "#ff9670", "#c0c7d0")
+STATUS_COLORS = {"buono": "#30d158", "imperfetto": "#ff9f0a", "inavviabile": "#ff5257"}
 
+COLOR_GAMES = "#64d2ff"  # Azzurro per i giochi
+COLOR_BIOS = "#bf5af2"   # Viola per i BIOS
+COLOR_WORKER_LABEL = "#ffd60a" # Giallo per la scritta "Worker:"
 
-def color_from_name(name):
-    n = int(hashlib.md5(name.encode("utf-8")).hexdigest()[:8], 16)
-    return PALETTE[n % len(PALETTE)]
+AUTHOR, YEAR = "Jonathan Sanfilippo", "2026"
+STATO = "#0c0c0c"
+FONDO, PANNELLO, CERCA = "#121212", "#131215", "#252428"
+TASTO, SCELTO, TESTO, GRIGIO = "#2c2c2c", "#3a3a3a", "#e0e0e0", "#9e9e9e"
+IN_ONDA = "#3b2f4f"
 
+FALLBACK_MAKER_COLORS = ("#30d158", "#bf5af2", "#ff6fae", "#64d2ff", "#ffd60a", "#a0724a")
+DEFAULT_MAKER_COLOR = "#8a94a6"
+
+_MAKER_TABLE = [
+    (("acclaim", "ljn"), "#30d158"),
+    (("american laser games",), "#bf5af2"),
+    (("arcadia systems", "arcadia"), "#ff6fae"),
+    (("aristocrat",), "#ff6b6b"),
+    (("artic",), "#64d2ff"),
+    (("atari",), "#ff5a5f"),
+    (("atlus",), "#ff453a"),
+    (("bandai",), "#ff6a3d"),
+    (("bally midway", "bally"), "#ff5c5c"),
+    (("banpresto",), "#ffd60a"),
+    (("capcom",), "#ffd60a"),
+    (("cave",), "#a0724a"),
+    (("centuri",), "#30d158"),
+    (("cinematronics",), "#bf5af2"),
+    (("data east",), "#ff6fae"),
+    (("dooyong",), "#64d2ff"),
+    (("electronic arts",), "#ff4747"),
+    (("eolith",), "#ffd60a"),
+    (("esco trading", "amuse"), "#a0724a"),
+    (("exelo",), "#30d158"),
+    (("face",), "#bf5af2"),
+    (("faelg",), "#ff6fae"),
+    (("gaelco",), "#ff4d4d"),
+    (("game tec", "g.t."), "#64d2ff"),
+    (("gottlieb",), "#ffd60a"),
+    (("gremlin",), "#a0724a"),
+    (("hori",), "#30d158"),
+    (("irem",), "#bf5af2"),
+    (("jaleco",), "#ff6fae"),
+    (("kaneko",), "#64d2ff"),
+    (("kiwako",), "#ffd60a"),
+    (("konami",), "#ff453a"),
+    (("lethal",), "#a0724a"),
+    (("lyn",), "#30d158"),
+    (("mcr",), "#ff5c5c"),
+    (("memtech",), "#bf5af2"),
+    (("metamorphic",), "#ff6fae"),
+    (("midway",), "#ff5d73"),
+    (("mitchell",), "#64d2ff"),
+    (("nichibutsu", "nihon bussan"), "#ffd60a"),
+    (("nintendo",), "#ff453a"),
+    (("nmk",), "#a0724a"),
+    (("pacific novelty",), "#30d158"),
+    (("psikyo",), "#bf5af2"),
+    (("quirex",), "#ff6fae"),
+    (("ramtek",), "#64d2ff"),
+    (("rck",), "#ffd60a"),
+    (("sammy",), "#a0724a"),
+    (("sanyo",), "#004ea2"),
+    (("seta",), "#30d158"),
+    (("sega",), "#0089cf"),
+    (("sigma",), "#bf5af2"),
+    (("snk",), "#4a90ff"),
+    (("sony",), "#003087"),
+    (("stern",), "#ff6fae"),
+    (("sun electronics", "sunsoft"), "#f39800"),
+    (("taito",), "#1a5fa8"),
+    (("technos japan", "technos"), "#64d2ff"),
+    (("tecmo",), "#ffd60a"),
+    (("toaplan",), "#a0724a"),
+    (("tuni",), "#30d158"),
+    (("universal",), "#bf5af2"),
+    (("vap",), "#ff6fae"),
+    (("video system",), "#64d2ff"),
+    (("visco",), "#ffd60a"),
+    (("williams",), "#a0724a"),
+    (("zaccaria",), "#30d158"),
+    (("namco",), "#30d158"),
+]
+
+def get_maker_color(maker_name):
+    if not maker_name or maker_name == "?":
+        return DEFAULT_MAKER_COLOR
+    m_lower = maker_name.lower()
+    for keys, color in _MAKER_TABLE:
+        for k in keys:
+            pattern = r'\b' + re.escape(k) + r'\b'
+            if re.search(pattern, m_lower):
+                return color
+    
+    h = int(hashlib.md5(m_lower.encode("utf-8")).hexdigest(), 16)
+    return FALLBACK_MAKER_COLORS[h % len(FALLBACK_MAKER_COLORS)]
 
 def get_contrast_color(hex_color):
     hex_color = hex_color.lstrip('#')
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
     luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
     return "#000000" if luminance > 0.5 else "#ffffff"
-
 
 def make_dot(color):
     pm = QPixmap(DOT, DOT)
@@ -64,13 +145,6 @@ def make_dot(color):
     p.drawEllipse(DOT / 2.0 - r, DOT / 2.0 - r, 2 * r, 2 * r)
     p.end()
     return QIcon(pm)
-
-
-AUTHOR, YEAR = "Jonathan Sanfilippo", "2026"
-STATO = "#0c0c0c"
-FONDO, PANNELLO, CERCA = "#121212", "#131215", "#252428"
-TASTO, SCELTO, TESTO, GRIGIO = "#2c2c2c", "#3a3a3a", "#e0e0e0", "#9e9e9e"
-IN_ONDA = "#3b2f4f"
 
 STYLE = f"""
 QWidget {{ background: {FONDO}; color: {TESTO}; }}
@@ -87,15 +161,14 @@ QLineEdit {{ background: {CERCA}; color: {TESTO}; border: none; border-radius: 1
             padding: 0 14px 0 4px; min-height: 36px; selection-background-color: {IN_ONDA}; }}
 QListWidget {{ background: {PANNELLO}; border: none; outline: 0; }}
 QListWidget::item:selected, QListWidget::item:selected:!active
-    {{ background: {SCELTO}; color: #ffffff; }}
+    {{ background: {CERCA}; color: #ffffff; }}
 QPushButton {{ background: {TASTO}; color: {TESTO}; border: none; border-radius: 6px;
               padding: 8px; }}
 QPushButton:hover {{ background: {SCELTO}; }}
 QSplitter::handle {{ background: {SCELTO}; }}
 QWidget#status {{ background: {STATO}; }}
-QWidget#status QLabel {{ color: {GRIGIO}; }}
+QWidget#status QLabel {{ color: #ffffff; }}
 """
-
 
 def lens_icon():
     pm = QPixmap(20, 20)
@@ -110,16 +183,8 @@ def lens_icon():
     p.end()
     return QIcon(pm)
 
-
-ROW_H = 44
-LABEL_COLORS = {"Year": "#0a84ff", "Maker": "#30d158",
-                "ROM": "#ff9f0a", "Clone of": "#bf5af2"}
-
-
-def sub_text(m):
-    parts = [m.get("year", "?"), m.get("maker", "?")]
-    return " \u00b7 ".join(x for x in parts if x and x != "?")
-
+ROW_H = 46
+LABEL_COLORS = {"Year": "#0a84ff", "Maker": "#30d158", "ROM": "#ff9f0a", "Clone of": "#bf5af2"}
 
 class GameDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
@@ -130,27 +195,46 @@ class GameDelegate(QStyledItemDelegate):
         r = option.rect
         selected = bool(option.state & QStyle.State_Selected)
         if selected:
-            painter.fillRect(r, QColor(SCELTO))
+            painter.fillRect(r, QColor(CERCA))
+            
         icon = index.data(Qt.DecorationRole)
         if isinstance(icon, QIcon):
-            icon.paint(painter, QRect(r.left() + 4, r.top() + (r.height() - DOT) // 2,
-                                      DOT, DOT))
+            icon.paint(painter, QRect(r.left() + 4, r.top() + (r.height() - DOT) // 2, DOT, DOT))
         x = r.left() + DOT + 10
         w = r.width() - DOT - 18
-        name = painter.fontMetrics().elidedText(index.data(Qt.DisplayRole) or "",
-                                                Qt.ElideRight, w)
+        
+        name = painter.fontMetrics().elidedText(index.data(Qt.DisplayRole) or "", Qt.ElideRight, w)
         painter.setPen(QColor("#ffffff" if selected else TESTO))
-        painter.drawText(QRect(x, r.top() + 4, w, 18), Qt.AlignLeft | Qt.AlignVCenter, name)
+        painter.drawText(QRect(x, r.top() + 7, w, 16), Qt.AlignLeft | Qt.AlignVCenter, name)
+        
         f = painter.font()
         if f.pointSizeF() > 0:
             f.setPointSizeF(max(f.pointSizeF() - 1.5, 7))
             painter.setFont(f)
-        sub = painter.fontMetrics().elidedText(index.data(Qt.UserRole + 1) or "",
-                                               Qt.ElideRight, w)
-        painter.setPen(QColor(index.data(Qt.UserRole + 2) or GRIGIO))
-        painter.drawText(QRect(x, r.top() + 23, w, 16), Qt.AlignLeft | Qt.AlignVCenter, sub)
-        painter.restore()
+            
+        fm = painter.fontMetrics()
+        cur_x = x
 
+        year_str = index.data(Qt.UserRole + 1) or ""
+        maker_str = index.data(Qt.UserRole + 3) or ""
+        maker_color = index.data(Qt.UserRole + 4) or DEFAULT_MAKER_COLOR
+
+        if year_str:
+            painter.setPen(QColor(GRIGIO))
+            painter.drawText(QRect(cur_x, r.top() + 25, w, 15), Qt.AlignLeft | Qt.AlignVCenter, year_str)
+            cur_x += fm.horizontalAdvance(year_str) + 4
+
+        if year_str and maker_str:
+            painter.setPen(QColor(GRIGIO))
+            sep = " \u00b7 "
+            painter.drawText(QRect(cur_x, r.top() + 25, w, 15), Qt.AlignLeft | Qt.AlignVCenter, sep)
+            cur_x += fm.horizontalAdvance(sep) + 2
+
+        if maker_str:
+            painter.setPen(QColor(maker_color))
+            painter.drawText(QRect(cur_x, r.top() + 25, w, 15), Qt.AlignLeft | Qt.AlignVCenter, maker_str)
+
+        painter.restore()
 
 class SearchBox(QLineEdit):
     def __init__(self):
@@ -167,40 +251,26 @@ class SearchBox(QLineEdit):
         else:
             super().keyPressEvent(e)
 
-
-def load_settings():
-    s = dict(DEFAULT_SETTINGS)
-    try:
-        with open(SETTINGS_FILE, encoding="utf-8") as f:
-            s.update(json.load(f))
-    except Exception:
-        pass
-    return s
-
+def load_json(path):
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 def save_settings(settings):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2)
-
-
-def load_meta():
     try:
-        with open(META_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
     except Exception:
-        return {}
-
-
-def save_meta(meta):
-    with open(META_FILE, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False)
-
+        pass
 
 def list_roms(rom_dir):
     if not rom_dir or not os.path.isdir(rom_dir):
         return []
     return sorted(f[:-4] for f in os.listdir(rom_dir) if f.lower().endswith(".zip"))
-
 
 def folder_size(path):
     total = 0
@@ -212,7 +282,6 @@ def folder_size(path):
                 pass
     return total
 
-
 def fmt_size(n):
     n = float(n)
     for u in ("B", "KB", "MB", "GB"):
@@ -221,140 +290,22 @@ def fmt_size(n):
         n /= 1024
     return "%.1f TB" % n
 
-
 def allow_flatpak(path):
     if MAME_CMD[0] != "flatpak":
         return
     try:
-        subprocess.run(["flatpak", "override", "--user", "--filesystem=" + path,
-                        MAME_CMD[-1]], capture_output=True, timeout=30)
+        subprocess.run(["flatpak", "override", "--user", "--filesystem=" + path, MAME_CMD[-1]], capture_output=True, timeout=10)
     except Exception:
         pass
-
-
-def fetch_meta_chunk(names):
-    out = {}
-    if not names:
-        return out
-    try:
-        res = subprocess.run(MAME_CMD + ["-listxml"] + names, capture_output=True,
-                             text=True, timeout=60)
-        root = ET.fromstring(res.stdout)
-        for m in root.iter("machine"):
-            out[m.get("name")] = {
-                "desc": (m.findtext("description") or m.get("name")),
-                "year": m.findtext("year") or "?",
-                "maker": m.findtext("manufacturer") or "?",
-                "clone": m.get("cloneof") or "",
-                "bios": m.get("isbios") == "yes" or m.get("isdevice") == "yes",
-            }
-    except Exception:
-        pass
-    return out
-
-
-def thumb_name(desc):
-    for ch in '&*/:`<>?\\|"':
-        desc = desc.replace(ch, "_")
-    return desc
-
 
 def img_path(name):
     return os.path.join(IMG_DIR, name + ".png")
 
-
-def download_image(name, desc):
-    path = img_path(name)
-    if os.path.exists(path) or os.path.exists(path + ".none"):
-        return
-    fname = urllib.parse.quote(thumb_name(desc)) + ".png"
-    for kind in IMG_KINDS:
-        try:
-            with urllib.request.urlopen(BASE_URL + kind + "/" + fname, timeout=10) as r:
-                data = r.read()
-            with open(path, "wb") as f:
-                f.write(data)
-            return
-        except Exception:
-            continue
-    open(path + ".none", "w").close()
-
-
-class Worker(QThread):
-    meta_ready = Signal(dict)
-    image_ready = Signal(str)
-    progress = Signal(int, int, str)
-    covers_done = Signal(int)
-    size_ready = Signal(float)
-
-    def __init__(self, roms, rom_dir, force_scrape=False):
-        super().__init__()
-        self.roms = roms
-        self.rom_dir = rom_dir
-        self.force_scrape = force_scrape
-
-    def run(self):
-        if self.rom_dir and os.path.isdir(self.rom_dir):
-            self.size_ready.emit(float(folder_size(self.rom_dir)))
-        
-        meta = load_meta()
-        missing = [r for r in self.roms if r not in meta or self.force_scrape]
-        if self.force_scrape:
-            missing = self.roms
-
-        if missing:
-            chunk_size = 100
-            total_missing = len(missing)
-            for i in range(0, total_missing, chunk_size):
-                if self.isInterruptionRequested():
-                    return
-                chunk = missing[i:i + chunk_size]
-                self.progress.emit(i, total_missing, "Caricamento metadati...")
-                partial = fetch_meta_chunk(chunk)
-                for r in chunk:
-                    if r not in partial:
-                        partial[r] = {"desc": r, "year": "?", "maker": "?", "clone": "", "bios": False}
-                meta.update(partial)
-                save_meta(meta)
-                self.meta_ready.emit(meta)
-
-        if self.isInterruptionRequested():
-            return
-
-        def need(r):
-            if self.force_scrape:
-                return True
-            return not os.path.exists(img_path(r)) and not os.path.exists(img_path(r) + ".none")
-
-        games = [r for r in self.roms if r in meta and not meta[r].get("bios", False)]
-        total_img = sum(1 for r in games if need(r))
-        done = got = 0
-        if total_img:
-            self.progress.emit(0, total_img, "Download copertine...")
-        
-        for r in games:
-            if self.isInterruptionRequested():
-                return
-            wanted = need(r)
-            desc = meta[r].get("desc", r)
-            if wanted:
-                download_image(r, desc)
-                done += 1
-                got += os.path.exists(img_path(r))
-                self.progress.emit(done, total_img, "Download copertine...")
-            self.image_ready.emit(r)
-            
-        if total_img:
-            self.covers_done.emit(got)
-
-
 class MameRunnerThread(QThread):
     finished = Signal()
-
     def __init__(self, cmd):
         super().__init__()
         self.cmd = cmd
-
     def run(self):
         try:
             p = subprocess.Popen(self.cmd)
@@ -363,19 +314,26 @@ class MameRunnerThread(QThread):
             pass
         self.finished.emit()
 
-
 class Launcher(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MAME Launcher")
-        self.resize(1100, 620)
+        self.resize(1100, 660)
         
-        self.meta = load_meta()
-        self.settings = load_settings()
-        self.roms = []
-        self.bios_dir_names = set()
+        self.settings = dict(DEFAULT_SETTINGS)
+        try:
+            with open(SETTINGS_FILE, encoding="utf-8") as f:
+                self.settings.update(json.load(f))
+        except Exception:
+            pass
+
+        self.start_background_worker()
+
+        self.meta = load_json(META_FILE)
+        self.status_cache = load_json(STATUS_FILE)
+        self.roms = list_roms(self.settings["rom_dir"])
+        self.bios_dir_names = set(list_roms(self.settings["bios_dir"])) if self.settings["bios_dir"] else set()
         self.rom_size = 0
-        self.workers = []
         self.all_item_cache = {}
         self.mame_thread = None
 
@@ -383,6 +341,11 @@ class Launcher(QWidget):
         self.search_timer.setSingleShot(True)
         self.search_timer.setInterval(120)
         self.search_timer.timeout.connect(self.fill_list)
+
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(1500)
+        self.poll_timer.timeout.connect(self.poll_background_updates)
+        self.poll_timer.start()
 
         self.search = SearchBox()
         self.search.textChanged.connect(self.on_search_changed)
@@ -409,7 +372,7 @@ class Launcher(QWidget):
         self.cover.setAlignment(Qt.AlignCenter)
         self.cover.setMinimumSize(400, 300)
 
-        self.info = QLabel("Caricamento in corso...")
+        self.info = QLabel("Pronto per giocare...")
         self.info.setWordWrap(True)
         self.info.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         
@@ -433,13 +396,9 @@ class Launcher(QWidget):
         center_container.setLayout(center_layout)
 
         self.folders_list = QListWidget()
+        self.folders_list.setIconSize(QSize(DOT, DOT))
         self.folders_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.folders_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        f_all = QListWidgetItem("Tutti i giochi")
-        f_fav = QListWidgetItem("Preferiti")
-        self.folders_list.addItem(f_all)
-        self.folders_list.addItem(f_fav)
-        self.folders_list.setCurrentItem(f_all)
         self.folders_list.currentItemChanged.connect(lambda *_: self.fill_list())
 
         folders_layout = QVBoxLayout()
@@ -472,92 +431,172 @@ class Launcher(QWidget):
         status.setFixedHeight(26)
         sl = QHBoxLayout(status)
         sl.setContentsMargins(12, 0, 12, 0)
-        self.count_lbl = QLabel("Inizializzazione...")
-        self.prog_lbl = QLabel("Caricamento...")
+        self.count_lbl = QLabel("Pronto")
+        self.prog_lbl = QLabel("Background worker inattivo")
         sl.addWidget(self.count_lbl)
         sl.addSpacing(18)
         sl.addWidget(self.prog_lbl)
         sl.addStretch(1)
-        sl.addWidget(QLabel("\u00a9 %s %s \u00b7 MIT license" % (YEAR, AUTHOR)))
+        self.copy_lbl = QLabel("\u00a9 %s %s \u00b7 MIT license" % (YEAR, AUTHOR))
+        self.copy_lbl.setStyleSheet("color: #ffffff;")
+        sl.addWidget(self.copy_lbl)
         lay.addWidget(status)
 
         self.setStyleSheet(STYLE)
         
-        QTimer.singleShot(50, self.deferred_init)
-
-    def deferred_init(self):
-        self.prog_lbl.setText("Scansione cartella ROM...")
-        QApplication.processEvents()
-
-        self.roms = list_roms(self.settings["rom_dir"])
-        if self.settings["bios_dir"]:
-            self.bios_dir_names = set(list_roms(self.settings["bios_dir"]))
-        
-        self.prog_lbl.setText("Indicizzazione giochi...")
-        QApplication.processEvents()
-
         self.build_item_cache()
+        self.update_folders_list()
         self.fill_list()
-        
-        self.prog_lbl.setText("Avvio servizi...")
-        self.start_worker(force_scrape=False)
 
         if not self.settings["rom_dir"]:
             self.cover.setText("No ROM folder set")
             self.info.setText("Seleziona una cartella ROM per iniziare.")
-            self.first_run()
+            QTimer.singleShot(100, self.first_run)
+        else:
+            QTimer.singleShot(200, self.compute_folder_size_async)
 
-    def game_color(self, name):
-        i = getattr(self, "color_slot", {}).get(name)
-        return SCALA_FILE[i % len(SCALA_FILE)] if i is not None else color_from_name(name)
+    def start_background_worker(self):
+        worker_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mame_background_worker.py")
+        if os.path.exists(worker_script):
+            if os.path.exists(LOCK_FILE):
+                return
+            try:
+                subprocess.Popen([sys.executable, worker_script])
+            except Exception:
+                pass
+
+    def compute_folder_size_async(self):
+        if self.settings["rom_dir"] and os.path.isdir(self.settings["rom_dir"]):
+            self.rom_size = folder_size(self.settings["rom_dir"])
+            self.update_status()
+
+    def poll_background_updates(self):
+        new_meta = load_json(META_FILE)
+        new_status = load_json(STATUS_FILE)
+        current_roms = list_roms(self.settings["rom_dir"])
+
+        prog_data = load_json(PROGRESS_FILE)
+        if prog_data:
+            task = prog_data.get("task", "Elaborazione...")
+            current = prog_data.get("current", 0)
+            total = prog_data.get("total", 0)
+            if total > 0:
+                pct = int((current / total) * 100)
+                self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>{task} ({current}/{total} - {pct}%)</span>")
+            else:
+                self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>{task}</span>")
+        else:
+            if os.path.exists(LOCK_FILE):
+                self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>avvio in corso...</span>")
+            else:
+                self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>inattivo o completato</span>")
+
+        changed = (new_meta != self.meta or new_status != self.status_cache or current_roms != self.roms)
+        if changed:
+            self.meta = new_meta
+            self.status_cache = new_status
+            self.roms = current_roms
+            self.build_item_cache()
+            self.update_folders_list()
+            self.fill_list()
+            curr = self.current_name()
+            if curr:
+                self.set_cover(curr)
+                self.update_play_button_color(curr)
+
+    def game_status_color(self, name):
+        st = self.status_cache.get(name, "buono")
+        return STATUS_COLORS.get(st, STATUS_COLORS["buono"])
 
     def build_item_cache(self):
         self.all_item_cache = {}
         games = [r for r in self.roms if not self.meta.get(r, {}).get("bios", False)]
         games.sort(key=lambda r: (self.meta.get(r, {}).get("desc", r)).lower())
-        self.color_slot = {r: i for i, r in enumerate(games)}
+        
         for r in self.roms:
             m = self.meta.get(r)
             desc = m["desc"] if m else r
             it = QListWidgetItem(desc)
             it.setData(Qt.UserRole, r)
-            c = self.game_color(r)
+            
+            st = self.status_cache.get(r, "buono")
+            c = STATUS_COLORS.get(st, STATUS_COLORS["buono"])
             it.setIcon(make_dot(c))
+            
             m_info = self.meta.get(r, {})
-            it.setData(Qt.UserRole + 1, sub_text(m_info))
-            it.setData(Qt.UserRole + 2, c)
+            year_val = m_info.get("year", "?")
+            maker_val = m_info.get("maker", "?")
+            maker_c = get_maker_color(maker_val)
+
+            it.setData(Qt.UserRole + 1, year_val)
+            it.setData(Qt.UserRole + 3, maker_val)
+            it.setData(Qt.UserRole + 4, maker_c)
+            it.setData(Qt.UserRole + 5, st)
+            it.setData(Qt.UserRole + 6, c)
+            
             self.all_item_cache[r] = it
 
-    def start_worker(self, force_scrape=False):
-        for w in self.workers:
-            w.requestInterruption()
-            for sig in (w.meta_ready, w.image_ready, w.progress, w.covers_done, w.size_ready):
-                try:
-                    sig.disconnect()
-                except Exception:
-                    pass
-        w = Worker(self.roms, self.settings["rom_dir"], force_scrape=force_scrape)
-        w.meta_ready.connect(self.on_meta)
-        w.image_ready.connect(self.on_image)
-        w.progress.connect(lambda d, t, msg: self.prog_lbl.setText(
-            "%s %d/%d" % (msg, d, t) if t else msg))
-        w.covers_done.connect(lambda n: self.prog_lbl.setText(
-            "Copertine scaricate: %d" % n if n else ""))
-        w.size_ready.connect(self.on_size)
-        self.workers.append(w)
-        w.start()
+    def update_folders_list(self):
+        curr_item = self.folders_list.currentItem()
+        curr_data = curr_item.data(Qt.UserRole) if curr_item else "all"
+
+        self.folders_list.blockSignals(True)
+        self.folders_list.clear()
+
+        valid_roms = [r for r in self.roms if not self.meta.get(r, {}).get("bios", False)]
+        total_count = len(valid_roms)
+        favs = set(self.settings.get("favorites", []))
+        fav_count = sum(1 for r in valid_roms if r in favs)
+
+        it_all = QListWidgetItem(f"Tutti i giochi  ({total_count})")
+        it_all.setIcon(make_dot(COLOR_GAMES))
+        it_all.setData(Qt.UserRole, "all")
+        self.folders_list.addItem(it_all)
+
+        it_fav = QListWidgetItem(f"Preferiti  ({fav_count})")
+        it_fav.setIcon(make_dot("#bf5af2"))
+        it_fav.setData(Qt.UserRole, "favorites")
+        self.folders_list.addItem(it_fav)
+
+        status_counts = {"buono": 0, "imperfetto": 0, "inavviabile": 0}
+        for r in valid_roms:
+            st = self.status_cache.get(r, "buono")
+            if st in status_counts:
+                status_counts[st] += 1
+
+        status_labels = [
+            ("Buono", "buono", STATUS_COLORS["buono"]),
+            ("Imperfetto", "imperfetto", STATUS_COLORS["imperfetto"]),
+            ("Inavviabile", "inavviabile", STATUS_COLORS["inavviabile"])
+        ]
+
+        for label, st_key, color in status_labels:
+            count = status_counts[st_key]
+            it_st = QListWidgetItem(f"Stato: {label}  ({count})")
+            it_st.setIcon(make_dot(color))
+            it_st.setData(Qt.UserRole, f"status:{st_key}")
+            self.folders_list.addItem(it_st)
+
+        found = False
+        for i in range(self.folders_list.count()):
+            item = self.folders_list.item(i)
+            if item.data(Qt.UserRole) == curr_data:
+                self.folders_list.setCurrentItem(item)
+                found = True
+                break
+        if not found and self.folders_list.count() > 0:
+            self.folders_list.setCurrentRow(0)
+
+        self.folders_list.blockSignals(False)
 
     def first_run(self):
-        QMessageBox.information(self, "MAME Launcher",
-                                "Primo avvio: seleziona la cartella delle ROM, "
-                                "poi quella dei file BIOS.")
+        QMessageBox.information(self, "MAME Launcher", "Primo avvio: seleziona la cartella delle ROM, poi quella dei file BIOS.")
         if self.set_folder("rom_dir"):
             self.set_folder("bios_dir")
 
     def set_folder(self, key):
         title = "Seleziona cartella ROM" if key == "rom_dir" else "Seleziona cartella BIOS"
-        start = self.settings[key] or (MAME_HOME if os.path.isdir(MAME_HOME)
-                                       else os.path.expanduser("~"))
+        start = self.settings[key] or (MAME_HOME if os.path.isdir(MAME_HOME) else os.path.expanduser("~"))
         d = QFileDialog.getExistingDirectory(self, title, start)
         if not d:
             return False
@@ -571,24 +610,15 @@ class Launcher(QWidget):
             self.update_status()
         return True
 
-    def reload_roms(self, force_scrape=False):
-        self.prog_lbl.setText("Aggiornamento ROM...")
+    def reload_roms(self):
+        self.start_background_worker()
         self.roms = list_roms(self.settings["rom_dir"])
+        self.meta = load_json(META_FILE)
+        self.status_cache = load_json(STATUS_FILE)
         self.build_item_cache()
+        self.update_folders_list()
         self.fill_list()
-        self.start_worker(force_scrape=force_scrape)
-
-    def manual_scrape(self):
-        if not self.settings["rom_dir"] or not self.roms:
-            QMessageBox.warning(self, "Scraping", "Seleziona prima una cartella ROM valida.")
-            return
-        res = QMessageBox.question(
-            self, "Scraping Manuale", 
-            "Vuoi forzare il ricaricamento completo di metadati e copertine?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if res == QMessageBox.Yes:
-            self.reload_roms(force_scrape=True)
+        self.compute_folder_size_async()
 
     def build_menu(self):
         bar = QMenuBar()
@@ -596,16 +626,12 @@ class Launcher(QWidget):
         
         a_refresh = QAction("Aggiorna ROM", self)
         a_refresh.setShortcut(QKeySequence.Refresh)
-        a_refresh.triggered.connect(lambda: self.reload_roms(force_scrape=False))
+        a_refresh.triggered.connect(self.reload_roms)
         file_menu.addAction(a_refresh)
-
-        a_scrape = QAction("Scraping Manuale (Cover e Dati)", self)
-        a_scrape.triggered.connect(self.manual_scrape)
-        file_menu.addAction(a_scrape)
 
         file_menu.addSeparator()
         a_open = QAction("Apri cartella MAME", self)
-        a_open.triggered.connect(self.open_folder)
+        a_open.triggered.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(MAME_HOME)))
         file_menu.addAction(a_open)
         file_menu.addSeparator()
         a_quit = QAction("Esci", self)
@@ -631,17 +657,9 @@ class Launcher(QWidget):
             disp.addAction(a)
         return bar
 
-    def open_folder(self):
-        QDesktopServices.openUrl(QUrl.fromLocalFile(MAME_HOME))
-
     def set_fullscreen(self, value):
         self.settings["fullscreen"] = value
         save_settings(self.settings)
-
-    def on_meta(self, meta):
-        self.meta = meta
-        self.build_item_cache()
-        self.fill_list()
 
     def toggle_favorite(self):
         name = self.current_name()
@@ -654,34 +672,24 @@ class Launcher(QWidget):
             favs.append(name)
         save_settings(self.settings)
         self.update_favorite_button(name)
-        if self.folders_list.currentItem() and self.folders_list.currentItem().text() == "Preferiti":
-            self.fill_list()
+        self.update_folders_list()
 
     def update_favorite_button(self, name):
         favs = self.settings.get("favorites", [])
-        if name in favs:
-            self.fav_btn.setText("★ Preferito")
-        else:
-            self.fav_btn.setText("☆ Preferito")
+        self.fav_btn.setText("★ Preferito" if name in favs else "☆ Preferito")
 
     def update_play_button_color(self, name):
         if not name:
             self.btn.setStyleSheet("")
+            self.btn.setText("Play")
             return
-        c = self.game_color(name)
+        c = self.game_status_color(name)
         text_color = get_contrast_color(c)
+        st = self.status_cache.get(name, "buono")
+        self.btn.setText(f"Play ({st.capitalize()})")
         self.btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {c};
-                color: {text_color};
-                border: none;
-                border-radius: 6px;
-                padding: 8px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {c};
-            }}
+            QPushButton {{ background-color: {c}; color: {text_color}; border: none; border-radius: 6px; padding: 8px; font-weight: bold; }}
+            QPushButton:hover {{ background-color: {c}; }}
         """)
 
     def on_search_changed(self):
@@ -689,7 +697,8 @@ class Launcher(QWidget):
 
     def fill_list(self):
         q = self.search.text().lower()
-        curr_folder = self.folders_list.currentItem().text() if self.folders_list.currentItem() else "Tutti i giochi"
+        curr_item = self.folders_list.currentItem()
+        curr_data = curr_item.data(Qt.UserRole) if curr_item else "all"
         favs = set(self.settings.get("favorites", []))
 
         self.list.setUpdatesEnabled(False)
@@ -705,12 +714,16 @@ class Launcher(QWidget):
         q_tokens = q.split() if q else []
 
         for r in self.roms:
-            if curr_folder == "Preferiti" and r not in favs:
-                continue
-
             m = self.meta.get(r)
             if m and m.get("bios", False):
                 continue
+            if curr_data == "favorites" and r not in favs:
+                continue
+            elif str(curr_data).startswith("status:"):
+                target_st = str(curr_data).split(":", 1)[1]
+                st = self.status_cache.get(r, "buono")
+                if st != target_st:
+                    continue
 
             if q_tokens:
                 desc = m["desc"] if m else r
@@ -731,29 +744,25 @@ class Launcher(QWidget):
                 self.list.addItem(it)
 
         self.list.blockSignals(False)
-        if self.list.count():
+        if self.list.count() and not self.list.currentItem():
             self.list.setCurrentRow(0)
-        else:
-            self.show_game()
 
         self.list.setUpdatesEnabled(True)
         self.update_status()
 
     def update_status(self):
-        total = len(self.roms)
-        shown = self.list.count()
-        parts = ["%d di %d giochi" % (shown, total) if shown != total
-                 else "%d giochi" % total]
-        names = self.bios_dir_names | {r for r in self.roms
-                                       if r in self.meta and self.meta[r].get("bios", False)}
-        parts.append("%d BIOS" % len(names))
+        valid_roms = [r for r in self.roms if not self.meta.get(r, {}).get("bios", False)]
+        total_games = len(valid_roms)
+        names = self.bios_dir_names | {r for r in self.roms if self.meta.get(r, {}).get("bios", False)}
+        
+        parts = [
+            f"<span style='color:{COLOR_GAMES};'>●</span> <span style='color:#ffffff;'>{total_games} giochi</span>",
+            f"<span style='color:{COLOR_BIOS};'>●</span> <span style='color:#ffffff;'>{len(names)} BIOS</span>"
+        ]
         if self.rom_size:
-            parts.append(fmt_size(self.rom_size))
+            parts.append(f"<span style='color:#ffffff;'>{fmt_size(self.rom_size)}</span>")
+        
         self.count_lbl.setText(" \u00b7 ".join(parts))
-
-    def on_size(self, n):
-        self.rom_size = n
-        self.update_status()
 
     def current_name(self):
         it = self.list.currentItem()
@@ -765,13 +774,20 @@ class Launcher(QWidget):
             self.update_play_button_color(None)
             return
         m = self.meta.get(name, {"desc": name, "year": "?", "maker": "?", "clone": ""})
-        rows = [("Year", m.get("year", "?")), ("Maker", m.get("maker", "?")), ("ROM", name + ".zip")]
+        
+        rows = [
+            ("Year", m.get("year", "?")), 
+            ("Maker", m.get("maker", "?")), 
+            ("ROM", name + ".zip")
+        ]
         if m.get("clone"):
             rows.append(("Clone of", m["clone"]))
+            
         txt = "<b>%s</b>" % html.escape(m.get("desc", name))
         for k, v in rows:
-            txt += "<br><span style='color:%s'>%s:</span> %s" % (
-                LABEL_COLORS.get(k, "#ffffff"), k, html.escape(v))
+            color = LABEL_COLORS.get(k, "#ffffff")
+            txt += "<br><span style='color:%s'>%s:</span> %s" % (color, k, html.escape(v))
+            
         self.info.setText(txt)
         self.set_cover(name)
         self.update_favorite_button(name)
@@ -781,22 +797,13 @@ class Launcher(QWidget):
         p = img_path(name)
         if os.path.exists(p):
             pm = QPixmap(p)
-            self.cover.setPixmap(pm.scaled(self.cover.size(), Qt.KeepAspectRatio,
-                                           Qt.SmoothTransformation))
+            self.cover.setPixmap(pm.scaled(self.cover.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         elif os.path.exists(p + ".none"):
             self.cover.setPixmap(QPixmap())
             self.cover.setText("Nessuna immagine")
         else:
             self.cover.setPixmap(QPixmap())
-            self.cover.setText("Caricamento copertina...")
-
-    def on_image(self, name):
-        if name in self.all_item_cache:
-            c = self.game_color(name)
-            self.all_item_cache[name].setIcon(make_dot(c))
-            self.all_item_cache[name].setData(Qt.UserRole + 2, c)
-        if name == self.current_name():
-            self.set_cover(name)
+            self.cover.setText("Caricamento in background...")
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -804,38 +811,21 @@ class Launcher(QWidget):
         if name:
             self.set_cover(name)
 
-    def on_mame_closed(self):
-        self.show()
-        self.raise_()
-        self.activateWindow()
-
     def launch(self, *_):
         name = self.current_name()
         if not name and self.roms:
             name = self.roms[0]
             
         if name and self.settings["rom_dir"]:
-            rompath = ";".join(d for d in (self.settings["rom_dir"],
-                                           self.settings["bios_dir"]) if d)
-            
-            cmd = MAME_CMD + [
-                "-rompath", rompath,
-                "-window",
-                "-nomax",
-                "-resolution", "1100x620",
-                name
-            ]
-            
+            rompath = ";".join(d for d in (self.settings["rom_dir"], self.settings["bios_dir"]) if d)
+            cmd = MAME_CMD + ["-rompath", rompath, "-window", "-nomax", "-resolution", "1100x620", name]
             self.hide()
-            
             self.mame_thread = MameRunnerThread(cmd)
-            self.mame_thread.finished.connect(self.on_mame_closed)
+            self.mame_thread.finished.connect(lambda: (self.show(), self.raise_(), self.activateWindow()))
             self.mame_thread.start()
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     w = Launcher()
     w.show()
-    app.processEvents()
     sys.exit(app.exec())
