@@ -26,9 +26,10 @@ A sleek, lightweight, and modern desktop launcher for **MAME** built with Python
 2. Install the required dependencies:
    ```bash
    sudo apt install python3 python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets flatpak
+   ```
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install flathub org.mamedev.MAME
-   ```
+   
 3. Run the application:
    ```bash
    python z.mame.py
