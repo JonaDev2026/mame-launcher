@@ -1,28 +1,39 @@
 # MAME Launcher
 
-Un launcher desktop moderno, leggero ed elegante per **MAME**, scritto in Python con PySide6. Gestisce la tua collezione di ROM, recupera automaticamente i metadati, scarica le copertine e permette di avviare i giochi con un'interfaccia grafica curata e reattiva[cite: 2].
+A sleek, lightweight, and modern desktop launcher for **MAME** built with Python and PySide6. It lists your ROM collection from a folder, automatically fetches metadata from MAME, downloads cover art from the Libretro thumbnails repository without needing an API key, extracts vibrant dominant colors for a polished UI look, manages BIOS files, and handles background tasks with a dedicated worker.
 
-## Caratteristiche Principali
+![MAME Launcher Preview](preview.png)
 
-- **Scansione Automatica delle ROM:** Rileva istantaneamente gli archivi `.zip` standard presenti nella cartella ROM[cite: 2].
-- **Worker in Background Dedicato:** Un processo asincrono elabora i metadati e aggiorna lo stato in tempo reale con una barra di progresso dettagliata nella barra di stato.
-- **Libreria e Filtri Avanzati:** Sidebar laterale per filtrare rapidamente tra *Tutti i giochi*, *Preferiti* e suddivisione per stato di funzionamento (*Buono*, *Imperfetto*, *Inavviabile*).
-- **Integrazione Metadati e BIOS:** Rilevamento automatico dei file BIOS, dei produttori con colorazione dedicata e dei cloni.
-- **Download delle Copertine:** Recupera automaticamente box art e schermate dal repository `libretro-thumbnails` senza bisogno di chiavi API[cite: 2].
-- **Supporto Flatpak:** Funziona nativamente con le installazioni Flatpak di MAME gestendo i permessi della sandbox in autonomia[cite: 2].
-- **Configurazione Persistente:** Salvataggio di preferenze, cache e immagini nella cartella utente `~/.config/mame_launcher`.
+## Features
 
-## Requisiti
+- **Automatic ROM Scanning:** Reads standard `.zip` ROM archives from your custom ROM directory.
+- **Background Worker:** An asynchronous worker process parses metadata and updates your library status in real-time with a detailed progress bar.
+- **Advanced Library & Filters:** A side panel allowing you to quickly switch between *All Games*, *Favorites*, and status categories (*Good*, *Imperfect*, *Non-working*).
+- **BIOS & Manufacturer Integration:** Automatic detection of BIOS files, manufacturers with dedicated color coding, and clone lineages.
+- **Cover Art Downloader:** Automatically fetches box arts, titles, and snapshots from the `libretro-thumbnails` repository.
+- **Dynamic Accent Colors:** Computes the dominant color of each game's cover art to style list icons automatically.
+- **Flatpak Support:** Works out-of-the-box with Flatpak installations of MAME, handling sandbox folder permissions automatically.
+- **Persistent Caching:** Caches metadata, statuses, and images locally in `~/.config/mame_launcher` for instant startups.
+- **Clean Dark Theme:** Custom styled widgets, pill search bar, and full-screen toggle support.
 
-- Python 3.8+[cite: 2]
-- [PySide6](https://pypi.org/project/PySide6/)[cite: 2]
-- MAME installato sul sistema (tramite pacchetto Flatpak o eseguibile)[cite: 2]
+## Requirements
 
-## Installazione e Utilizzo
+- Python 3.8+
+- [PySide6](https://pypi.org/project/PySide6/)
+- MAME installed on your system (configured as a command or Flatpak package)
 
-1. Clona o scarica questa repository.
-2. Installa le dipendenze necessarie (esempio per sistemi Debian/Ubuntu):
-   ```bash
+## Installation & Usage
+
+1. Clone or download this repository.
+2. Install the required dependencies by running these commands in your terminal:
    sudo apt install python3 python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets flatpak
    flatpak remote-add --if-not-exists flathub [https://dl.flathub.org/repo/flathub.flatpakrepo](https://dl.flathub.org/repo/flathub.flatpakrepo)
    flatpak install flathub org.mamedev.MAME
+3. Run the application:
+   python z.mame_2.py
+
+On your first launch, you will be prompted to select your **ROM folder** and optionally your **BIOS folder**. You can also update these paths at any time via the **Settings** menu.
+
+## License
+
+Distributed under the MIT License. See the code headers for more details.
