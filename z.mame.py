@@ -1,12 +1,7 @@
-import hashlib
 import html
-import json
 import os
 import subprocess
 import sys
-import urllib.parse
-import urllib.request
-import xml.etree.ElementTree as ET
 
 from PySide6.QtCore import QRect, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QIcon,
@@ -16,41 +11,14 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
                                QListWidget, QListWidgetItem, QMenuBar,
                                QPushButton, QVBoxLayout, QWidget)
 
-CONFIG_DIR = os.path.expanduser("~/.config/mame_launcher")
-IMG_DIR = os.path.join(CONFIG_DIR, "img")
-META_FILE = os.path.join(CONFIG_DIR, "meta.json")
-SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
-BASE_URL = "https://raw.githubusercontent.com/libretro-thumbnails/MAME/master/"
-IMG_KINDS = ["Named_Boxarts", "Named_Titles", "Named_Snaps"]
-
-MAME_CMD = ["flatpak", "run", "org.mamedev.MAME"]
-MAME_HOME = os.path.expanduser("~/mame")
-DEFAULT_SETTINGS = {"fullscreen": False, "rom_dir": "", "bios_dir": "", "favorites": []}
+from core import (CONFIG_DIR, DOT, IMG_DIR, MAME_HOME, SCALA_FILE,
+                  allow_flatpak, color_from_name, download_image, fetch_meta_chunk,
+                  filter_games, fmt_size, folder_size, get_contrast_color, img_path,
+                  list_roms, load_meta, load_settings, resolve_mame_cmd, save_meta,
+                  save_settings, sub_text)
 
 os.makedirs(IMG_DIR, exist_ok=True)
 os.makedirs(CONFIG_DIR, exist_ok=True)
-
-PALETTE = ("#ff5257", "#ff9f0a", "#ffd60a", "#30d158", "#0a84ff",
-           "#bf5af2", "#ff375f", "#64d2ff")
-DOT = 24
-SCALA_FILE = ("#ff5257", "#30d158", "#ff7f11", "#42a0ff",
-              "#ffd60a", "#bf5af2", "#ff6fae", "#64d2ff",
-              "#c19272", "#66e3b0", "#d4af37", "#9190f9",
-              "#e23179", "#b4e04a", "#ff9670", "#c0c7d0")
-
-
-def color_from_name(name):
-    n = int(hashlib.md5(name.encode("utf-8")).hexdigest()[:8], 16)
-    return PALETTE[n % len(PALETTE)]
-
-
-def get_contrast_color(hex_color):
-    hex_color = hex_color.lstrip('#')
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-    luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-    return "#000000" if luminance > 0.5 else "#ffffff"
 
 
 def make_dot(color):
@@ -116,11 +84,6 @@ LABEL_COLORS = {"Year": "#0a84ff", "Maker": "#30d158",
                 "ROM": "#ff9f0a", "Clone of": "#bf5af2"}
 
 
-def sub_text(m):
-    parts = [m.get("year", "?"), m.get("maker", "?")]
-    return " \u00b7 ".join(x for x in parts if x and x != "?")
-
-
 class GameDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
         return QSize(option.rect.width(), ROW_H)
@@ -168,118 +131,6 @@ class SearchBox(QLineEdit):
             super().keyPressEvent(e)
 
 
-def load_settings():
-    s = dict(DEFAULT_SETTINGS)
-    try:
-        with open(SETTINGS_FILE, encoding="utf-8") as f:
-            s.update(json.load(f))
-    except Exception:
-        pass
-    return s
-
-
-def save_settings(settings):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2)
-
-
-def load_meta():
-    try:
-        with open(META_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def save_meta(meta):
-    with open(META_FILE, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False)
-
-
-def list_roms(rom_dir):
-    if not rom_dir or not os.path.isdir(rom_dir):
-        return []
-    return sorted(f[:-4] for f in os.listdir(rom_dir) if f.lower().endswith(".zip"))
-
-
-def folder_size(path):
-    total = 0
-    for root, _d, files in os.walk(path):
-        for f in files:
-            try:
-                total += os.path.getsize(os.path.join(root, f))
-            except OSError:
-                pass
-    return total
-
-
-def fmt_size(n):
-    n = float(n)
-    for u in ("B", "KB", "MB", "GB"):
-        if n < 1024:
-            return "%.1f %s" % (n, u) if u != "B" else "%d B" % n
-        n /= 1024
-    return "%.1f TB" % n
-
-
-def allow_flatpak(path):
-    if MAME_CMD[0] != "flatpak":
-        return
-    try:
-        subprocess.run(["flatpak", "override", "--user", "--filesystem=" + path,
-                        MAME_CMD[-1]], capture_output=True, timeout=30)
-    except Exception:
-        pass
-
-
-def fetch_meta_chunk(names):
-    out = {}
-    if not names:
-        return out
-    try:
-        res = subprocess.run(MAME_CMD + ["-listxml"] + names, capture_output=True,
-                             text=True, timeout=60)
-        root = ET.fromstring(res.stdout)
-        for m in root.iter("machine"):
-            out[m.get("name")] = {
-                "desc": (m.findtext("description") or m.get("name")),
-                "year": m.findtext("year") or "?",
-                "maker": m.findtext("manufacturer") or "?",
-                "clone": m.get("cloneof") or "",
-                "bios": m.get("isbios") == "yes" or m.get("isdevice") == "yes",
-            }
-    except Exception:
-        pass
-    return out
-
-
-def thumb_name(desc):
-    for ch in '&*/:`<>?\\|"':
-        desc = desc.replace(ch, "_")
-    return desc
-
-
-def img_path(name):
-    return os.path.join(IMG_DIR, name + ".png")
-
-
-def download_image(name, desc):
-    path = img_path(name)
-    if os.path.exists(path) or os.path.exists(path + ".none"):
-        return
-    fname = urllib.parse.quote(thumb_name(desc)) + ".png"
-    for kind in IMG_KINDS:
-        try:
-            with urllib.request.urlopen(BASE_URL + kind + "/" + fname, timeout=10) as r:
-                data = r.read()
-            with open(path, "wb") as f:
-                f.write(data)
-            return
-        except Exception:
-            continue
-    open(path + ".none", "w").close()
-
-
 class Worker(QThread):
     meta_ready = Signal(dict)
     image_ready = Signal(str)
@@ -287,11 +138,12 @@ class Worker(QThread):
     covers_done = Signal(int)
     size_ready = Signal(float)
 
-    def __init__(self, roms, rom_dir, force_scrape=False):
+    def __init__(self, roms, rom_dir, force_scrape=False, mame_cmd=None):
         super().__init__()
         self.roms = roms
         self.rom_dir = rom_dir
         self.force_scrape = force_scrape
+        self.mame_cmd = mame_cmd
 
     def run(self):
         if self.rom_dir and os.path.isdir(self.rom_dir):
@@ -310,7 +162,7 @@ class Worker(QThread):
                     return
                 chunk = missing[i:i + chunk_size]
                 self.progress.emit(i, total_missing, "Caricamento metadati...")
-                partial = fetch_meta_chunk(chunk)
+                partial = fetch_meta_chunk(chunk, self.mame_cmd)
                 for r in chunk:
                     if r not in partial:
                         partial[r] = {"desc": r, "year": "?", "maker": "?", "clone": "", "bios": False}
@@ -338,7 +190,7 @@ class Worker(QThread):
             wanted = need(r)
             desc = meta[r].get("desc", r)
             if wanted:
-                download_image(r, desc)
+                download_image(r, desc, force=self.force_scrape)
                 done += 1
                 got += os.path.exists(img_path(r))
                 self.progress.emit(done, total_img, "Download copertine...")
@@ -536,7 +388,8 @@ class Launcher(QWidget):
                     sig.disconnect()
                 except Exception:
                     pass
-        w = Worker(self.roms, self.settings["rom_dir"], force_scrape=force_scrape)
+        w = Worker(self.roms, self.settings["rom_dir"], force_scrape=force_scrape,
+                   mame_cmd=resolve_mame_cmd(self.settings))
         w.meta_ready.connect(self.on_meta)
         w.image_ready.connect(self.on_image)
         w.progress.connect(lambda d, t, msg: self.prog_lbl.setText(
@@ -620,6 +473,17 @@ class Launcher(QWidget):
         a_bios.triggered.connect(lambda: self.set_folder("bios_dir"))
         sett.addAction(a_bios)
         sett.addSeparator()
+        mame_sub = sett.addMenu("Esegui MAME")
+        mame_grp = QActionGroup(self)
+        mame_grp.setExclusive(True)
+        for label, mode in (("Comando nativo (mame)", "native"),
+                            ("Flatpak (org.mamedev.MAME)", "flatpak")):
+            a = QAction(label, self, checkable=True)
+            a.setChecked(self.settings.get("mame_cmd", "native") == mode)
+            a.triggered.connect(lambda _c, v=mode: self.set_mame_mode(v))
+            mame_grp.addAction(a)
+            mame_sub.addAction(a)
+        sett.addSeparator()
         disp = sett.addMenu("Modalità schermo")
         grp = QActionGroup(self)
         grp.setExclusive(True)
@@ -637,6 +501,11 @@ class Launcher(QWidget):
     def set_fullscreen(self, value):
         self.settings["fullscreen"] = value
         save_settings(self.settings)
+
+    def set_mame_mode(self, mode):
+        self.settings["mame_cmd"] = mode
+        save_settings(self.settings)
+        allow_flatpak(self.settings.get("rom_dir", ""), resolve_mame_cmd(self.settings))
 
     def on_meta(self, meta):
         self.meta = meta
@@ -701,28 +570,9 @@ class Launcher(QWidget):
         if not self.all_item_cache and self.roms:
             self.build_item_cache()
 
-        filtered = []
-        q_tokens = q.split() if q else []
-
-        for r in self.roms:
-            if curr_folder == "Preferiti" and r not in favs:
-                continue
-
-            m = self.meta.get(r)
-            if m and m.get("bios", False):
-                continue
-
-            if q_tokens:
-                desc = m["desc"] if m else r
-                year = m.get("year", "?") if m else "?"
-                maker = m.get("maker", "?") if m else "?"
-                clone = m.get("clone", "") if m else ""
-                hay = " ".join((desc, r, year, maker, clone)).lower()
-                if not all(t in hay for t in q_tokens):
-                    continue
-            filtered.append(r)
-
-        filtered.sort(key=lambda r: (self.meta.get(r, {}).get("desc", r)).lower())
+        filtered = filter_games(self.roms, self.meta, query=q,
+                                favorites_only=(curr_folder == "Preferiti"),
+                                favorites=favs)
 
         for r in filtered:
             it = self.all_item_cache.get(r)
@@ -818,7 +668,7 @@ class Launcher(QWidget):
             rompath = ";".join(d for d in (self.settings["rom_dir"],
                                            self.settings["bios_dir"]) if d)
             
-            cmd = MAME_CMD + [
+            cmd = resolve_mame_cmd(self.settings) + [
                 "-rompath", rompath,
                 "-window",
                 "-nomax",
