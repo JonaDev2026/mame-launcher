@@ -184,7 +184,6 @@ def lens_icon():
     return QIcon(pm)
 
 ROW_H = 46
-LABEL_COLORS = {"Year": "#0a84ff", "Maker": "#30d158", "ROM": "#ff9f0a", "Clone of": "#bf5af2"}
 
 class GameDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
@@ -328,6 +327,9 @@ class Launcher(QWidget):
             pass
 
         self.start_background_worker()
+        
+        # Stato per tracciare il worker ed evitare refresh pesanti continui
+        self.worker_was_active = os.path.exists(LOCK_FILE)
 
         self.meta = load_json(META_FILE)
         self.status_cache = load_json(STATUS_FILE)
@@ -337,9 +339,10 @@ class Launcher(QWidget):
         self.all_item_cache = {}
         self.mame_thread = None
 
+        # Timer di debounce per la ricerca (250ms)
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
-        self.search_timer.setInterval(120)
+        self.search_timer.setInterval(250)
         self.search_timer.timeout.connect(self.fill_list)
 
         self.poll_timer = QTimer(self)
@@ -471,10 +474,9 @@ class Launcher(QWidget):
             self.update_status()
 
     def poll_background_updates(self):
-        new_meta = load_json(META_FILE)
-        new_status = load_json(STATUS_FILE)
-        current_roms = list_roms(self.settings["rom_dir"])
+        is_locked = os.path.exists(LOCK_FILE)
 
+        # Aggiornamento leggero e continuo solo dell'etichetta di progresso
         prog_data = load_json(PROGRESS_FILE)
         if prog_data:
             task = prog_data.get("task", "Elaborazione...")
@@ -486,16 +488,16 @@ class Launcher(QWidget):
             else:
                 self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>{task}</span>")
         else:
-            if os.path.exists(LOCK_FILE):
+            if is_locked:
                 self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>avvio in corso...</span>")
             else:
                 self.prog_lbl.setText(f"<span style='color:{COLOR_WORKER_LABEL};'>Worker:</span> <span style='color:#ffffff;'>inattivo o completato</span>")
 
-        changed = (new_meta != self.meta or new_status != self.status_cache or current_roms != self.roms)
-        if changed:
-            self.meta = new_meta
-            self.status_cache = new_status
-            self.roms = current_roms
+        # Ricarica i dati pesanti della libreria SOLO quando il worker ha appena finito (transizione attivo -> inattivo)
+        if self.worker_was_active and not is_locked:
+            self.meta = load_json(META_FILE)
+            self.status_cache = load_json(STATUS_FILE)
+            self.roms = list_roms(self.settings["rom_dir"])
             self.build_item_cache()
             self.update_folders_list()
             self.fill_list()
@@ -503,6 +505,8 @@ class Launcher(QWidget):
             if curr:
                 self.set_cover(curr)
                 self.update_play_button_color(curr)
+
+        self.worker_was_active = is_locked
 
     def game_status_color(self, name):
         st = self.status_cache.get(name, "buono")
@@ -612,6 +616,7 @@ class Launcher(QWidget):
 
     def reload_roms(self):
         self.start_background_worker()
+        self.worker_was_active = True
         self.roms = list_roms(self.settings["rom_dir"])
         self.meta = load_json(META_FILE)
         self.status_cache = load_json(STATUS_FILE)
@@ -693,6 +698,7 @@ class Launcher(QWidget):
         """)
 
     def on_search_changed(self):
+        self.search_timer.stop()
         self.search_timer.start()
 
     def fill_list(self):
@@ -784,6 +790,7 @@ class Launcher(QWidget):
             rows.append(("Clone of", m["clone"]))
             
         txt = "<b>%s</b>" % html.escape(m.get("desc", name))
+        LABEL_COLORS = {"Year": "#0a84ff", "Maker": "#30d158", "ROM": "#ff9f0a", "Clone of": "#bf5af2"}
         for k, v in rows:
             color = LABEL_COLORS.get(k, "#ffffff")
             txt += "<br><span style='color:%s'>%s:</span> %s" % (color, k, html.escape(v))
