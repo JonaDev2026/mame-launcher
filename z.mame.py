@@ -1,10 +1,14 @@
+import glob
 import hashlib
 import html
 import json
 import os
 import re
+import select
+import struct
 import subprocess
 import sys
+import time
 import urllib.parse
 from PySide6.QtCore import QRect, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QDesktopServices, QIcon,
@@ -13,12 +17,6 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
                                QLineEdit, QMessageBox, QSplitter, QStyle, QStyledItemDelegate,
                                QListWidget, QListWidgetItem, QMenuBar,
                                QPushButton, QVBoxLayout, QWidget)
-
-try:
-    import pygame
-    HAS_PYGAME = True
-except ImportError:
-    HAS_PYGAME = False
 
 CONFIG_DIR = os.path.expanduser("~/.config/mame_launcher")
 IMG_DIR = os.path.join(CONFIG_DIR, "img")
@@ -249,6 +247,7 @@ QMenu::separator {{ height: 1px; background: {SCELTO}; margin: 4px 0; }}
 QLineEdit {{ background: {CERCA}; color: {TESTO}; border: none; border-radius: 18px;
             padding: 0 14px 0 4px; min-height: 36px; selection-background-color: {IN_ONDA}; }}
 QListWidget {{ background: {PANNELLO}; border: none; outline: 0; }}
+QListWidget:focus {{ border: 1px solid {COLOR_GAMES}; }}
 QListWidget::item:selected, QListWidget::item:selected:!active
     {{ background: {CERCA}; color: #ffffff; }}
 QPushButton {{ background: {TASTO}; color: {TESTO}; border: none; border-radius: 6px;
@@ -388,6 +387,108 @@ def allow_flatpak(path):
 
 def img_path(name):
     return os.path.join(IMG_DIR, name + ".png")
+
+class GamepadThread(QThread):
+    up_pressed = Signal()
+    down_pressed = Signal()
+    left_pressed = Signal()
+    right_pressed = Signal()
+    a_pressed = Signal()
+    b_pressed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.running = True
+        self.enabled = True
+
+    def run(self):
+        while self.running:
+            js_devices = sorted(glob.glob("/dev/input/js*"))
+            if not js_devices:
+                self.msleep(1000)
+                continue
+            
+            fd = None
+            try:
+                fd = os.open(js_devices[0], os.O_RDONLY | os.O_NONBLOCK)
+            except Exception:
+                self.msleep(1000)
+                continue
+
+            axis = {}
+            active_dir = None
+            next_repeat = 0
+
+            while self.running:
+                r, _, _ = select.select([fd], [], [], 0.02)
+                if r:
+                    try:
+                        data = os.read(fd, 8)
+                    except Exception:
+                        break
+                    if len(data) == 8:
+                        t, val, ev_type, num = struct.unpack("IhBB", data)
+                        ev_type &= ~0x80
+
+                        if self.enabled:
+                            if ev_type == 1:  # Button press
+                                if val == 1:
+                                    if num == 0:    # Tasto A Xbox
+                                        self.a_pressed.emit()
+                                    elif num == 1:  # Tasto B Xbox
+                                        self.b_pressed.emit()
+                            elif ev_type == 2:  # Axis motion
+                                axis[num] = val
+
+                if not self.enabled:
+                    self.msleep(20)
+                    continue
+
+                y_val = axis.get(1, 0)
+                if abs(y_val) < 15000:
+                    y_val = axis.get(7, 0)
+
+                x_val = axis.get(0, 0)
+                if abs(x_val) < 15000:
+                    x_val = axis.get(6, 0)
+
+                cur_dir = None
+                if y_val < -15000:
+                    cur_dir = "UP"
+                elif y_val > 15000:
+                    cur_dir = "DOWN"
+                elif x_val < -15000:
+                    cur_dir = "LEFT"
+                elif x_val > 15000:
+                    cur_dir = "RIGHT"
+
+                now = time.time()
+                if cur_dir != active_dir:
+                    active_dir = cur_dir
+                    if active_dir:
+                        self.emit_dir(active_dir)
+                        next_repeat = now + 0.280
+                elif active_dir and now >= next_repeat:
+                    self.emit_dir(active_dir)
+                    next_repeat = now + 0.090
+
+                self.msleep(10)
+
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+
+    def emit_dir(self, direction):
+        if direction == "UP":
+            self.up_pressed.emit()
+        elif direction == "DOWN":
+            self.down_pressed.emit()
+        elif direction == "LEFT":
+            self.left_pressed.emit()
+        elif direction == "RIGHT":
+            self.right_pressed.emit()
 
 class MameRunnerThread(QThread):
     finished = Signal()
@@ -534,26 +635,23 @@ class Launcher(QWidget):
         sl.addWidget(self.copy_lbl)
         lay.addWidget(status)
 
-        # Inizializzazione Gamepad tramite Pygame
-        if HAS_PYGAME:
-            pygame.init()
-            pygame.joystick.init()
-            self.joysticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
-            for joy in self.joysticks:
-                joy.init()
-            
-            self.joy_axis_y = 0.0
-            self.joy_timer = QTimer(self)
-            self.joy_timer.setInterval(50)
-            self.joy_timer.timeout.connect(self.poll_joystick)
-            self.joy_timer.start()
-
         self.setStyleSheet(STYLE)
         
         self.update_library_header()
         self.build_item_cache()
         self.update_folders_list()
         self.fill_list()
+        self.list.setFocus()
+
+        # Inizializza il thread del joypad
+        self.gamepad = GamepadThread()
+        self.gamepad.up_pressed.connect(self.on_pad_up)
+        self.gamepad.down_pressed.connect(self.on_pad_down)
+        self.gamepad.left_pressed.connect(self.on_pad_left)
+        self.gamepad.right_pressed.connect(self.on_pad_right)
+        self.gamepad.a_pressed.connect(self.launch)
+        self.gamepad.b_pressed.connect(self.toggle_favorite)
+        self.gamepad.start()
 
         if not self.settings["rom_dir"]:
             self.cover.setText(self.tr("no_rom_folder"))
@@ -561,6 +659,42 @@ class Launcher(QWidget):
             QTimer.singleShot(100, self.first_run)
         else:
             QTimer.singleShot(200, self.compute_folder_size_async)
+
+    def on_pad_up(self):
+        if not self.isVisible():
+            return
+        w = self.focusWidget()
+        if w == self.folders_list:
+            r = self.folders_list.currentRow()
+            if r > 0:
+                self.folders_list.setCurrentRow(r - 1)
+        else:
+            r = self.list.currentRow()
+            if r > 0:
+                self.list.setCurrentRow(r - 1)
+
+    def on_pad_down(self):
+        if not self.isVisible():
+            return
+        w = self.focusWidget()
+        if w == self.folders_list:
+            r = self.folders_list.currentRow()
+            if r < self.folders_list.count() - 1:
+                self.folders_list.setCurrentRow(r + 1)
+        else:
+            r = self.list.currentRow()
+            if r < self.list.count() - 1:
+                self.list.setCurrentRow(r + 1)
+
+    def on_pad_left(self):
+        if not self.isVisible():
+            return
+        self.folders_list.setFocus()
+
+    def on_pad_right(self):
+        if not self.isVisible():
+            return
+        self.list.setFocus()
 
     def tr(self, key):
         lang = self.settings.get("language", "en")
@@ -645,42 +779,6 @@ class Launcher(QWidget):
 
         self.worker_was_active = is_locked
 
-    def poll_joystick(self):
-        if not HAS_PYGAME:
-            return
-        for event in pygame.event.get():
-            # D-Pad / Frecce direzionali
-            if event.type == pygame.JOYHATMOTION:
-                x, y = event.value
-                if y == 1:
-                    self.move_selection(-1)
-                elif y == -1:
-                    self.move_selection(1)
-            
-            # Stick Analogico Sinistro (Asse verticali)
-            elif event.type == pygame.JOYAXISMOTION:
-                if event.axis == 1:
-                    if event.value < -0.5 and self.joy_axis_y >= -0.5:
-                        self.move_selection(-1)
-                    elif event.value > 0.5 and self.joy_axis_y <= 0.5:
-                        self.move_selection(1)
-                    self.joy_axis_y = event.value
-            
-            # Tasto A (Button 0)
-            elif event.type == pygame.JOYBUTTONDOWN:
-                if event.button == 0:
-                    self.launch()
-
-    def move_selection(self, delta):
-        if self.list.count() == 0:
-            return
-        current = self.list.currentRow()
-        if current == -1:
-            current = 0
-            delta = 0
-        new_row = max(0, min(self.list.count() - 1, current + delta))
-        self.list.setCurrentRow(new_row)
-
     def game_status_color(self, name):
         st = self.status_cache.get(name, "buono")
         return STATUS_COLORS.get(st, STATUS_COLORS["buono"])
@@ -749,7 +847,7 @@ class Launcher(QWidget):
 
         for label, st_key, color in status_labels:
             count = status_counts[st_key]
-            it_st = QListWidgetItem(f"{self.tr('status_label')} {label}  ({count})")
+            it_st = QListWidgetItem(f"{label}  ({count})")
             it_st.setIcon(make_dot(color))
             it_st.setData(Qt.UserRole, f"status:{st_key}")
             self.folders_list.addItem(it_st)
@@ -853,6 +951,8 @@ class Launcher(QWidget):
         save_settings(self.settings)
 
     def toggle_favorite(self):
+        if not self.isVisible():
+            return
         name = self.current_name()
         if not name:
             return
@@ -1012,17 +1112,39 @@ class Launcher(QWidget):
             self.set_cover(name)
 
     def launch(self, *_):
+        # RISOLUZIONE BUG: Ignora qualsiasi richiesta se un gioco è già in corso o la finestra è nascosta
+        if (self.mame_thread is not None and self.mame_thread.isRunning()) or not self.isVisible():
+            return
+
         name = self.current_name()
         if not name and self.roms:
             name = self.roms[0]
             
         if name and self.settings["rom_dir"]:
+            # Disabilita temporaneamente la ricezione input dal joypad
+            if hasattr(self, "gamepad"):
+                self.gamepad.enabled = False
+
             rompath = ";".join(d for d in (self.settings["rom_dir"], self.settings["bios_dir"]) if d)
             cmd = MAME_CMD + ["-rompath", rompath, "-window", "-nomax", "-resolution", "1100x620", name]
             self.hide()
             self.mame_thread = MameRunnerThread(cmd)
-            self.mame_thread.finished.connect(lambda: (self.show(), self.raise_(), self.activateWindow()))
+            self.mame_thread.finished.connect(self.on_game_finished)
             self.mame_thread.start()
+
+    def on_game_finished(self):
+        # Riattiva il joypad e mostro nuovamente l'interfaccia principale
+        if hasattr(self, "gamepad"):
+            self.gamepad.enabled = True
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def closeEvent(self, event):
+        if hasattr(self, "gamepad"):
+            self.gamepad.running = False
+            self.gamepad.wait()
+        super().closeEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
