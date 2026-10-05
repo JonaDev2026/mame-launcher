@@ -14,6 +14,12 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
                                QListWidget, QListWidgetItem, QMenuBar,
                                QPushButton, QVBoxLayout, QWidget)
 
+try:
+    import pygame
+    HAS_PYGAME = True
+except ImportError:
+    HAS_PYGAME = False
+
 CONFIG_DIR = os.path.expanduser("~/.config/mame_launcher")
 IMG_DIR = os.path.join(CONFIG_DIR, "img")
 META_FILE = os.path.join(CONFIG_DIR, "meta.json")
@@ -528,6 +534,20 @@ class Launcher(QWidget):
         sl.addWidget(self.copy_lbl)
         lay.addWidget(status)
 
+        # Inizializzazione Gamepad tramite Pygame
+        if HAS_PYGAME:
+            pygame.init()
+            pygame.joystick.init()
+            self.joysticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
+            for joy in self.joysticks:
+                joy.init()
+            
+            self.joy_axis_y = 0.0
+            self.joy_timer = QTimer(self)
+            self.joy_timer.setInterval(50)
+            self.joy_timer.timeout.connect(self.poll_joystick)
+            self.joy_timer.start()
+
         self.setStyleSheet(STYLE)
         
         self.update_library_header()
@@ -552,7 +572,6 @@ class Launcher(QWidget):
         self.retranslate_ui()
 
     def retranslate_ui(self):
-        # Ricostruisci il menu per aggiornare le voci localizzate
         new_bar = self.build_menu()
         self.layout().setMenuBar(new_bar)
         self.menu_bar_widget.deleteLater()
@@ -625,6 +644,42 @@ class Launcher(QWidget):
                 self.update_play_button_color(curr)
 
         self.worker_was_active = is_locked
+
+    def poll_joystick(self):
+        if not HAS_PYGAME:
+            return
+        for event in pygame.event.get():
+            # D-Pad / Frecce direzionali
+            if event.type == pygame.JOYHATMOTION:
+                x, y = event.value
+                if y == 1:
+                    self.move_selection(-1)
+                elif y == -1:
+                    self.move_selection(1)
+            
+            # Stick Analogico Sinistro (Asse verticali)
+            elif event.type == pygame.JOYAXISMOTION:
+                if event.axis == 1:
+                    if event.value < -0.5 and self.joy_axis_y >= -0.5:
+                        self.move_selection(-1)
+                    elif event.value > 0.5 and self.joy_axis_y <= 0.5:
+                        self.move_selection(1)
+                    self.joy_axis_y = event.value
+            
+            # Tasto A (Button 0)
+            elif event.type == pygame.JOYBUTTONDOWN:
+                if event.button == 0:
+                    self.launch()
+
+    def move_selection(self, delta):
+        if self.list.count() == 0:
+            return
+        current = self.list.currentRow()
+        if current == -1:
+            current = 0
+            delta = 0
+        new_row = max(0, min(self.list.count() - 1, current + delta))
+        self.list.setCurrentRow(new_row)
 
     def game_status_color(self, name):
         st = self.status_cache.get(name, "buono")
