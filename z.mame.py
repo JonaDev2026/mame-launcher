@@ -5,6 +5,7 @@ import json
 import os
 import re
 import select
+import shutil
 import struct
 import subprocess
 import sys
@@ -69,6 +70,9 @@ LANGS = {
         "first_run_msg": "First run: select the ROM folder, then the BIOS folder.",
         "menu_file": "File",
         "menu_refresh": "Refresh ROMs",
+        "menu_create_fav_folder": "Create Favorites Folder",
+        "fav_folder_success": "Favorites folder created ({count} ROMs copied)!",
+        "fav_folder_empty": "No favorite ROMs found or ROM directory not set.",
         "menu_open_mame": "Open MAME folder",
         "menu_quit": "Quit",
         "menu_settings": "Settings",
@@ -109,6 +113,9 @@ LANGS = {
         "first_run_msg": "Primo avvio: seleziona la cartella delle ROM, poi quella dei file BIOS.",
         "menu_file": "File",
         "menu_refresh": "Aggiorna ROM",
+        "menu_create_fav_folder": "Crea cartella preferiti",
+        "fav_folder_success": "Cartella preferiti creata con successo ({count} ROM copiate)!",
+        "fav_folder_empty": "Nessuna ROM preferita trovata o cartella ROM non impostata.",
         "menu_open_mame": "Apri cartella MAME",
         "menu_quit": "Esci",
         "menu_settings": "Impostazioni",
@@ -885,6 +892,34 @@ class Launcher(QWidget):
             self.update_status()
         return True
 
+    def create_favorites_folder(self):
+        rom_dir = self.settings.get("rom_dir")
+        favs = self.settings.get("favorites", [])
+        if not rom_dir or not os.path.isdir(rom_dir) or not favs:
+            QMessageBox.warning(self, "MAME Launcher", self.tr("fav_folder_empty"))
+            return
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        target_dir = os.path.join(script_dir, "favorite")
+        os.makedirs(target_dir, exist_ok=True)
+
+        copied = 0
+        for fav in favs:
+            zip_filename = f"{fav}.zip"
+            src_path = os.path.join(rom_dir, zip_filename)
+            if os.path.isfile(src_path):
+                dst_path = os.path.join(target_dir, zip_filename)
+                try:
+                    shutil.copy2(src_path, dst_path)
+                    copied += 1
+                except Exception:
+                    pass
+
+        if copied > 0:
+            QMessageBox.information(self, "MAME Launcher", self.tr("fav_folder_success").format(count=copied))
+        else:
+            QMessageBox.warning(self, "MAME Launcher", self.tr("fav_folder_empty"))
+
     def reload_roms(self):
         self.start_background_worker()
         self.worker_was_active = True
@@ -904,6 +939,10 @@ class Launcher(QWidget):
         a_refresh.setShortcut(QKeySequence.Refresh)
         a_refresh.triggered.connect(self.reload_roms)
         file_menu.addAction(a_refresh)
+
+        a_fav_folder = QAction(self.tr("menu_create_fav_folder"), self)
+        a_fav_folder.triggered.connect(self.create_favorites_folder)
+        file_menu.addAction(a_fav_folder)
 
         file_menu.addSeparator()
         a_open = QAction(self.tr("menu_open_mame"), self)
@@ -1112,7 +1151,6 @@ class Launcher(QWidget):
             self.set_cover(name)
 
     def launch(self, *_):
-        # RISOLUZIONE BUG: Ignora qualsiasi richiesta se un gioco è già in corso o la finestra è nascosta
         if (self.mame_thread is not None and self.mame_thread.isRunning()) or not self.isVisible():
             return
 
@@ -1121,7 +1159,6 @@ class Launcher(QWidget):
             name = self.roms[0]
             
         if name and self.settings["rom_dir"]:
-            # Disabilita temporaneamente la ricezione input dal joypad
             if hasattr(self, "gamepad"):
                 self.gamepad.enabled = False
 
@@ -1133,7 +1170,6 @@ class Launcher(QWidget):
             self.mame_thread.start()
 
     def on_game_finished(self):
-        # Riattiva il joypad e mostro nuovamente l'interfaccia principale
         if hasattr(self, "gamepad"):
             self.gamepad.enabled = True
         self.show()
